@@ -8,7 +8,7 @@ Initialize Groundskeeper in the current project.
 gk init [--non-interactive]
 ```
 
-Creates `.groundskeeper/` directory structure, default config, and GitHub Actions workflows.
+Creates `.groundskeeper/` directory structure and default config. Run `gk generate` separately to create CI workflow files.
 
 **Options:**
 

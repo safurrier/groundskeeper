@@ -19,8 +19,12 @@ This creates:
 
 - `.groundskeeper/config.yml` — workflow configuration
 - `.groundskeeper/skills/` — directory for local skills
-- `.github/workflows/gk_agent.yml` — reusable GitHub Actions workflow
-- `.github/workflows/gk_pr-review.yml` — caller workflow for PR reviews
+
+To also generate CI workflow files, add `ci: github-actions` to your config and run:
+
+```bash
+gk generate
+```
 
 ## Configuration
 

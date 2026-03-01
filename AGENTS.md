@@ -68,7 +68,7 @@ Format: YAML frontmatter (`name`, `description`, `triggers`, `allowed-tools`, `t
 
 | Command | Purpose |
 |---|---|
-| `gk init` | Bootstrap `.groundskeeper/` + CI workflows |
+| `gk init` | Bootstrap `.groundskeeper/` config and skills dir |
 | `gk list` | Show available skills (local + external + builtin) |
 | `gk run <skill> [--dry-run] [--yolo] [--args ...]` | Execute a single skill |
 | `gk run-workflow <name> [--dry-run] [--yolo] [--parallel] [--args ...]` | Execute a workflow chain from config |

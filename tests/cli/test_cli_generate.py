@@ -51,6 +51,27 @@ def test_gk_generate_no_config(fake_repo: Path):
     assert "no config" in result.output.lower() or "init" in result.output.lower()
 
 
+def test_gk_generate_no_ci_provider(fake_repo: Path):
+    """generate fails gracefully when ci key is missing from config."""
+    config = {
+        "version": 1,
+        "runner": "claude-code",
+        "workflows": {
+            "review": {
+                "triggers": {"pull_request": ["synchronize"]},
+                "skills": ["codex-code-review"],
+            }
+        },
+    }
+    (fake_repo / ".groundskeeper" / "config.yml").write_text(yaml.dump(config))
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["generate"])
+    assert result.exit_code != 0
+    assert "ci" in result.output.lower()
+    assert "github-actions" in result.output.lower()
+
+
 def test_gk_generate_chained_skills(fake_repo: Path):
     config = {
         "version": 1,

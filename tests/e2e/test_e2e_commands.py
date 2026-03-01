@@ -118,18 +118,15 @@ class TestGkShowE2E:
 class TestGkInitE2E:
     """Test `gk init` via real binary."""
 
-    def test_init_creates_workflows(self, tmp_path: Path) -> None:
+    def test_init_creates_config_only(self, tmp_path: Path) -> None:
         # Fresh repo without existing .groundskeeper
         subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
         result = run_gk("init", "--non-interactive", cwd=tmp_path)
         assert result.returncode == 0
         assert (tmp_path / ".groundskeeper" / "config.yml").exists()
-        assert (tmp_path / ".github" / "workflows" / "gk_agent.yml").exists()
-        # Validate YAML is parseable
-        wf = yaml.safe_load(
-            (tmp_path / ".github" / "workflows" / "gk_agent.yml").read_text()
-        )
-        assert wf is not None
+        # init should NOT generate CI workflow files
+        assert not (tmp_path / ".github" / "workflows").exists()
+        assert "gk generate" in result.stdout
 
 
 @requires_gk

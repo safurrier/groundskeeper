@@ -35,7 +35,7 @@ mise run check    # Run lint, type check, tests
 gk init
 ```
 
-Creates `.groundskeeper/config.yml` and generates GitHub Actions workflow files. Ships with two builtin skills (`codex-code-review` and `context-files`).
+Creates `.groundskeeper/config.yml` and a `skills/` directory. Ships with two builtin skills (`codex-code-review` and `context-files`).
 
 **2. List available skills**
 

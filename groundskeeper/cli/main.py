@@ -80,9 +80,8 @@ def cli(ctx: click.Context, skill_path: tuple[str, ...]) -> None:
     epilog="""
 \b
 Creates:
-  .groundskeeper/config.yml      CI configuration (triggers, skill chains)
+  .groundskeeper/config.yml      Workflow configuration
   .groundskeeper/skills/         Directory for local skill definitions
-  .github/workflows/gk_*.yml    GitHub Actions workflow files
 \b
 Examples:
   gk init                        Interactive setup
@@ -96,8 +95,8 @@ def init(non_interactive: bool) -> None:
     """Set up Groundskeeper in the current project.
 
     Creates the .groundskeeper/ directory with a default config and
-    generates GitHub Actions workflow files. Safe to re-run — existing
-    config is preserved.
+    skills directory. Safe to re-run — existing config is preserved.
+    Run 'gk generate' afterwards to create CI workflow files.
     """
     cwd = Path.cwd()
     gk_dir = cwd / ".groundskeeper"
@@ -117,10 +116,8 @@ def init(non_interactive: bool) -> None:
     else:
         click.echo(f"Config already exists: {config_path.relative_to(cwd)}")
 
-    # Generate workflows
-    _generate_workflows(cwd, config_path)
-
     click.echo("Groundskeeper initialized.")
+    click.echo("Run 'gk generate' to create CI workflow files.")
 
 
 @cli.command("list")
@@ -330,7 +327,12 @@ def _generate_workflows(cwd: Path, config_path: Path) -> None:
     """Generate GitHub Actions workflows from config."""
     config = load_config(config_path)
 
-    ci = config.get("ci", "github-actions")
+    ci = config.get("ci")
+    if ci is None:
+        raise click.ClickException(
+            "No CI provider configured. Add 'ci: github-actions' to "
+            ".groundskeeper/config.yml, then re-run."
+        )
     if ci != "github-actions":
         raise click.ClickException(f"Unsupported CI provider: {ci}")
 

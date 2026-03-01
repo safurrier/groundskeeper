@@ -1,6 +1,5 @@
 version: 1
 runner: claude-code
-ci: github-actions
 
 workflows:
   pr-review:
