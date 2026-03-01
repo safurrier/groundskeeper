@@ -17,8 +17,11 @@ class ClaudeCodeRunner:
         rendered = context.skill.render(context.arguments)
         cmd = ["claude", "-p", rendered, "--output-format", "json"]
 
-        if context.skill.allowed_tools:
-            for tool in context.skill.allowed_tools:
+        if context.skip_permissions:
+            cmd.append("--dangerously-skip-permissions")
+        else:
+            tools = context.allowed_tools_override or context.skill.allowed_tools
+            for tool in tools:
                 cmd.extend(["--allowedTools", tool])
 
         try:

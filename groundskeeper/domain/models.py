@@ -41,6 +41,8 @@ class RunContext:
     skill: Skill
     arguments: str = ""
     working_directory: Path = field(default_factory=Path.cwd)
+    skip_permissions: bool = False
+    allowed_tools_override: list[str] | None = None
 
 
 @dataclass

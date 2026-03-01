@@ -195,8 +195,15 @@ Examples:
     is_flag=True,
     help="Print the rendered prompt without executing.",
 )
+@click.option(
+    "--yolo",
+    is_flag=True,
+    help="Skip all permission checks (passes --dangerously-skip-permissions to claude).",
+)
 @click.pass_context
-def run(ctx: click.Context, name: str, arguments: str, dry_run: bool) -> None:
+def run(
+    ctx: click.Context, name: str, arguments: str, dry_run: bool, yolo: bool
+) -> None:
     """Execute a skill locally via Claude Code."""
     extra = ctx.obj.get("extra_skill_paths", ()) if ctx.obj else ()
     stores = _get_stores(extra_skill_paths=extra)
@@ -205,7 +212,7 @@ def run(ctx: click.Context, name: str, arguments: str, dry_run: bool) -> None:
     if skill is None:
         raise click.ClickException(f"Skill not found: {name}")
 
-    context = RunContext(skill=skill, arguments=arguments)
+    context = RunContext(skill=skill, arguments=arguments, skip_permissions=yolo)
 
     if dry_run:
         runner = DryRunRunner()
@@ -371,8 +378,15 @@ def _generate_workflows(cwd: Path, config_path: Path) -> None:
     is_flag=True,
     help="Print each rendered prompt without executing.",
 )
+@click.option(
+    "--yolo",
+    is_flag=True,
+    help="Skip all permission checks (passes --dangerously-skip-permissions to claude).",
+)
 @click.pass_context
-def run_workflow(ctx: click.Context, name: str, arguments: str, dry_run: bool) -> None:
+def run_workflow(
+    ctx: click.Context, name: str, arguments: str, dry_run: bool, yolo: bool
+) -> None:
     """Execute a workflow (chain of skills) locally.
 
     Reads .groundskeeper/config.yml, looks up the named workflow, and
@@ -405,18 +419,23 @@ def run_workflow(ctx: click.Context, name: str, arguments: str, dry_run: bool) -
                 "claude CLI not found. Install it from https://claude.ai/code"
             )
 
-    click.echo(f"Running workflow: {name} ({len(workflow.skills)} skills)")
+    click.echo(f"Running workflow: {name} ({len(workflow.steps)} skills)")
 
-    for i, skill_name in enumerate(workflow.skills, 1):
-        skill = resolve_skill(skill_name, stores)  # type: ignore[arg-type]
+    for i, step in enumerate(workflow.steps, 1):
+        skill = resolve_skill(step.name, stores)  # type: ignore[arg-type]
         if skill is None:
             raise click.ClickException(
-                f"Skill not found: {skill_name} "
-                f"(step {i}/{len(workflow.skills)} in workflow '{name}')"
+                f"Skill not found: {step.name} "
+                f"(step {i}/{len(workflow.steps)} in workflow '{name}')"
             )
 
-        click.echo(f"\n--- [{i}/{len(workflow.skills)}] {skill_name} ---")
-        context = RunContext(skill=skill, arguments=arguments)
+        click.echo(f"\n--- [{i}/{len(workflow.steps)}] {step.name} ---")
+        context = RunContext(
+            skill=skill,
+            arguments=arguments,
+            skip_permissions=yolo,
+            allowed_tools_override=workflow.effective_tools(step),
+        )
         result = runner.run(context)
 
         if result.output:
@@ -425,7 +444,7 @@ def run_workflow(ctx: click.Context, name: str, arguments: str, dry_run: bool) -
             click.echo(result.error, err=True)
 
         if not result.success:
-            click.echo(f"\nWorkflow failed at step {i}: {skill_name}")
+            click.echo(f"\nWorkflow failed at step {i}: {step.name}")
             raise SystemExit(result.exit_code or 1)
 
     click.echo(f"\nWorkflow '{name}' completed successfully.")

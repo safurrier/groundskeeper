@@ -15,6 +15,8 @@ def _make_context(
     body: str = "do something",
     arguments: str = "",
     allowed_tools: list[str] | None = None,
+    skip_permissions: bool = False,
+    allowed_tools_override: list[str] | None = None,
 ) -> RunContext:
     skill = Skill(
         name="test-skill",
@@ -23,7 +25,12 @@ def _make_context(
         source=SkillSource(kind="local", path=Path("/fake")),
         allowed_tools=allowed_tools or [],
     )
-    return RunContext(skill=skill, arguments=arguments)
+    return RunContext(
+        skill=skill,
+        arguments=arguments,
+        skip_permissions=skip_permissions,
+        allowed_tools_override=allowed_tools_override,
+    )
 
 
 class TestClaudeCodeRunner:
@@ -138,6 +145,60 @@ class TestClaudeCodeRunner:
 
         cmd = mock_run.call_args[0][0]  # type: ignore[attr-defined]
         assert "--allowedTools" not in cmd
+
+    @patch("groundskeeper.adapters.claude_code.subprocess.run")
+    def test_skip_permissions_in_command(self, mock_run: object) -> None:
+        stdout = json.dumps({"result": "ok", "is_error": False})
+        mock_run.return_value = subprocess.CompletedProcess(  # type: ignore[attr-defined]
+            args=["claude"],
+            returncode=0,
+            stdout=stdout,
+            stderr="",
+        )
+        context = _make_context(skip_permissions=True)
+        ClaudeCodeRunner().run(context)
+
+        cmd = mock_run.call_args[0][0]  # type: ignore[attr-defined]
+        assert "--dangerously-skip-permissions" in cmd
+
+    @patch("groundskeeper.adapters.claude_code.subprocess.run")
+    def test_skip_permissions_overrides_allowed_tools(self, mock_run: object) -> None:
+        stdout = json.dumps({"result": "ok", "is_error": False})
+        mock_run.return_value = subprocess.CompletedProcess(  # type: ignore[attr-defined]
+            args=["claude"],
+            returncode=0,
+            stdout=stdout,
+            stderr="",
+        )
+        context = _make_context(allowed_tools=["Read", "Bash"], skip_permissions=True)
+        ClaudeCodeRunner().run(context)
+
+        cmd = mock_run.call_args[0][0]  # type: ignore[attr-defined]
+        assert "--dangerously-skip-permissions" in cmd
+        assert "--allowedTools" not in cmd
+
+    @patch("groundskeeper.adapters.claude_code.subprocess.run")
+    def test_allowed_tools_override_beats_skill_frontmatter(
+        self, mock_run: object
+    ) -> None:
+        stdout = json.dumps({"result": "ok", "is_error": False})
+        mock_run.return_value = subprocess.CompletedProcess(  # type: ignore[attr-defined]
+            args=["claude"],
+            returncode=0,
+            stdout=stdout,
+            stderr="",
+        )
+        # Skill has Read,Bash but override says Write,Edit
+        context = _make_context(
+            allowed_tools=["Read", "Bash"],
+            allowed_tools_override=["Write", "Edit"],
+        )
+        ClaudeCodeRunner().run(context)
+
+        cmd = mock_run.call_args[0][0]  # type: ignore[attr-defined]
+        assert cmd.count("--allowedTools") == 2
+        idx = cmd.index("--allowedTools")
+        assert cmd[idx + 1] == "Write"
 
     @patch("groundskeeper.adapters.claude_code.subprocess.run")
     def test_json_parse_failure_falls_back_to_plain_text(

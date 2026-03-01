@@ -127,3 +127,80 @@ class TestGetWorkflow:
 
     def test_empty_config(self) -> None:
         assert get_workflow({}, "anything") is None
+
+
+class TestWorkflowAllowedTools:
+    """Test allowed-tools precedence: step > workflow > skill frontmatter."""
+
+    def test_workflow_level_tools(self) -> None:
+        config = {
+            "workflows": {
+                "check": {
+                    "triggers": {},
+                    "allowed-tools": ["Read", "Grep", "Glob"],
+                    "skills": ["code-review"],
+                }
+            }
+        }
+        wf = get_workflow(config, "check")
+        assert wf is not None
+        assert wf.allowed_tools == ["Read", "Grep", "Glob"]
+        # Step has no override, so effective_tools returns workflow-level
+        assert wf.effective_tools(wf.steps[0]) == ["Read", "Grep", "Glob"]
+
+    def test_per_step_tools_override_workflow(self) -> None:
+        config = {
+            "workflows": {
+                "check": {
+                    "triggers": {},
+                    "allowed-tools": ["Read", "Grep"],
+                    "skills": [
+                        {
+                            "name": "writer",
+                            "allowed-tools": ["Read", "Write", "Edit"],
+                        },
+                        "reader",
+                    ],
+                }
+            }
+        }
+        wf = get_workflow(config, "check")
+        assert wf is not None
+        assert wf.skills == ["writer", "reader"]
+        # Step with its own tools wins
+        assert wf.effective_tools(wf.steps[0]) == ["Read", "Write", "Edit"]
+        # Step without tools inherits workflow-level
+        assert wf.effective_tools(wf.steps[1]) == ["Read", "Grep"]
+
+    def test_no_tools_anywhere_returns_none(self) -> None:
+        config = {
+            "workflows": {
+                "bare": {
+                    "triggers": {},
+                    "skills": ["code-review"],
+                }
+            }
+        }
+        wf = get_workflow(config, "bare")
+        assert wf is not None
+        assert wf.effective_tools(wf.steps[0]) is None
+
+    def test_mixed_string_and_dict_skills(self) -> None:
+        config = {
+            "workflows": {
+                "mixed": {
+                    "triggers": {},
+                    "skills": [
+                        "simple-skill",
+                        {"name": "detailed-skill", "allowed-tools": ["Bash"]},
+                        "another-simple",
+                    ],
+                }
+            }
+        }
+        wf = get_workflow(config, "mixed")
+        assert wf is not None
+        assert wf.skills == ["simple-skill", "detailed-skill", "another-simple"]
+        assert wf.steps[0].allowed_tools == []
+        assert wf.steps[1].allowed_tools == ["Bash"]
+        assert wf.steps[2].allowed_tools == []
