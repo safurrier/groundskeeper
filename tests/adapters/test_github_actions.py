@@ -59,13 +59,13 @@ def test_workflow_directory() -> None:
     assert provider.workflow_directory == ".github/workflows"
 
 
-def test_generate_chain_workflow_two_skills() -> None:
-    """Chain with 2 skills produces a single file with both jobs and correct needs."""
+def test_generate_chain_workflow_two_skills_sequential() -> None:
+    """Sequential chain with 2 skills produces correct needs."""
     provider = GitHubActionsProvider()
     yaml_str = provider.generate_chain_workflow(
         workflow_name="review-chain",
         triggers={"pull_request": ["ready_for_review"]},
-        skill_names=["code-review", "context-files"],
+        stages=[["code-review"], ["context-files"]],
     )
     parsed = yaml.safe_load(yaml_str)
 
@@ -84,13 +84,13 @@ def test_generate_chain_workflow_two_skills() -> None:
     assert parsed["jobs"]["context-files"]["uses"] == "./.github/workflows/gk_agent.yml"
 
 
-def test_generate_chain_workflow_three_skills() -> None:
-    """Chain with 3 skills produces a linear needs chain."""
+def test_generate_chain_workflow_three_skills_sequential() -> None:
+    """Sequential chain with 3 skills produces a linear needs chain."""
     provider = GitHubActionsProvider()
     yaml_str = provider.generate_chain_workflow(
         workflow_name="full-review",
         triggers={"pull_request": ["opened", "synchronize"]},
-        skill_names=["lint", "code-review", "context-files"],
+        stages=[["lint"], ["code-review"], ["context-files"]],
     )
     parsed = yaml.safe_load(yaml_str)
 
@@ -110,7 +110,7 @@ def test_generate_chain_workflow_single_skill() -> None:
     yaml_str = provider.generate_chain_workflow(
         workflow_name="solo",
         triggers={"pull_request": ["opened"]},
-        skill_names=["code-review"],
+        stages=[["code-review"]],
     )
     parsed = yaml.safe_load(yaml_str)
 
@@ -119,11 +119,67 @@ def test_generate_chain_workflow_single_skill() -> None:
     assert parsed["jobs"]["code-review"]["uses"] == "./.github/workflows/gk_agent.yml"
 
 
+def test_generate_chain_workflow_parallel_stage() -> None:
+    """Skills in a parallel stage share the same needs."""
+    provider = GitHubActionsProvider()
+    yaml_str = provider.generate_chain_workflow(
+        workflow_name="parallel-check",
+        triggers={"pull_request": ["opened"]},
+        stages=[["lint", "type-check"], ["test"]],
+    )
+    parsed = yaml.safe_load(yaml_str)
+
+    # Parallel stage: lint and type-check have no needs
+    assert "needs" not in parsed["jobs"]["lint"]
+    assert "needs" not in parsed["jobs"]["type-check"]
+
+    # test depends on both lint and type-check
+    assert set(parsed["jobs"]["test"]["needs"]) == {"lint", "type-check"}
+
+
+def test_generate_chain_workflow_multi_parallel_stages() -> None:
+    """Multiple parallel stages chain correctly."""
+    provider = GitHubActionsProvider()
+    yaml_str = provider.generate_chain_workflow(
+        workflow_name="full",
+        triggers={"pull_request": ["opened"]},
+        stages=[["lint", "types"], ["unit-test", "integration-test"], ["deploy"]],
+    )
+    parsed = yaml.safe_load(yaml_str)
+
+    # Stage 1: no needs
+    assert "needs" not in parsed["jobs"]["lint"]
+    assert "needs" not in parsed["jobs"]["types"]
+
+    # Stage 2: depends on stage 1
+    assert set(parsed["jobs"]["unit-test"]["needs"]) == {"lint", "types"}
+    assert set(parsed["jobs"]["integration-test"]["needs"]) == {"lint", "types"}
+
+    # Stage 3: depends on stage 2
+    assert set(parsed["jobs"]["deploy"]["needs"]) == {
+        "unit-test",
+        "integration-test",
+    }
+
+
+def test_generate_chain_workflow_single_parallel_stage() -> None:
+    """A single parallel stage means all skills have no needs."""
+    provider = GitHubActionsProvider()
+    yaml_str = provider.generate_chain_workflow(
+        workflow_name="all-parallel",
+        triggers={"pull_request": ["opened"]},
+        stages=[["a", "b", "c"]],
+    )
+    parsed = yaml.safe_load(yaml_str)
+    for job_name in ["a", "b", "c"]:
+        assert "needs" not in parsed["jobs"][job_name]
+
+
 def test_generated_yaml_is_valid() -> None:
     """All generated YAML should be parseable."""
     provider = GitHubActionsProvider()
     yaml.safe_load(provider.generate_reusable_workflow())
     yaml.safe_load(provider.generate_caller("test", {"push": ["main"]}))
     yaml.safe_load(
-        provider.generate_chain_workflow("chain", {"push": ["main"]}, ["a", "b"])
+        provider.generate_chain_workflow("chain", {"push": ["main"]}, [["a"], ["b"]])
     )

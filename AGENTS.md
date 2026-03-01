@@ -12,6 +12,7 @@ groundskeeper/           # Python package (the library + CLI)
   builtins/              # Shipped skills + templates (config, GHA Jinja2)
   protocols.py           # Protocol interfaces (SkillStore, AgentRunner, CIProvider)
 tests/                   # Mirrors source layout; e2e/ has installed-CLI tests
+.groundskeeper/          # User config: config.yml + skills/
 docs/                    # MkDocs Material site
 docker/                  # Dev container setup
 mise.toml                # Task runner config (all commands below)
@@ -68,8 +69,8 @@ Format: YAML frontmatter (`name`, `description`, `triggers`, `allowed-tools`, `t
 |---|---|
 | `gk init` | Bootstrap `.groundskeeper/` + CI workflows |
 | `gk list` | Show available skills (local + external + builtin) |
-| `gk run <skill> [--dry-run] [--args ...]` | Execute a single skill |
-| `gk run-workflow <name> [--dry-run] [--args ...]` | Execute a workflow chain from config |
+| `gk run <skill> [--dry-run] [--yolo] [--args ...]` | Execute a single skill |
+| `gk run-workflow <name> [--dry-run] [--yolo] [--args ...]` | Execute a workflow chain from config |
 | `gk check [skill]` | Validate skill frontmatter |
 | `gk show <skill>` | Display skill metadata + body |
 | `gk render <skill>` | Output rendered prompt (used by CI) |
@@ -80,8 +81,17 @@ Format: YAML frontmatter (`name`, `description`, `triggers`, `allowed-tools`, `t
 
 - Skill names must be kebab-case (validated by parser regex)
 - Skill resolution order: local → external (--skill-path) → builtin (first-match wins)
-- `ClaudeCodeRunner` passes `--allowedTools` from skill frontmatter and parses JSON output
-- Workflows defined in `.groundskeeper/config.yml` under `workflows.<name>.skills: [...]`
+- `ClaudeCodeRunner` passes `--allowedTools` from skill frontmatter (or workflow override) and parses JSON output
+- Workflows in `.groundskeeper/config.yml` support per-step and workflow-level `allowed-tools` overrides (see `ai_agent_docs/config-and-skills.md`)
 - Multi-skill CI workflows generate a single GitHub Actions file with chained jobs
+- `--yolo` flag skips all permission checks (`--dangerously-skip-permissions`)
 - `pytest` excludes `e2e` marker by default (`addopts = "-m 'not e2e'"`)
 - ty is strict: warnings are errors
+
+## Reference Docs
+
+Deeper context (load as needed):
+- `ai_agent_docs/config-and-skills.md` — config.yml format, skill frontmatter spec, allowed-tools precedence
+- `docs/reference/skills.md` — user-facing skill authoring guide
+- `docs/reference/cli.md` — CLI reference
+- `groundskeeper/domain/parser.py` — authoritative parsing logic for SKILL.md

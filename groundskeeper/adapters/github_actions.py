@@ -46,22 +46,29 @@ class GitHubActionsProvider:
         self,
         workflow_name: str,
         triggers: dict[str, list[str]],
-        skill_names: list[str],
+        stages: list[list[str]],
     ) -> str:
-        """Generate a single workflow file with chained jobs for multiple skills."""
+        """Generate a single workflow file with staged jobs.
+
+        Skills within a stage run in parallel (no inter-dependencies).
+        Each stage waits for all skills in the previous stage to complete.
+        """
         triggers_dict = {k: {"types": v} for k, v in triggers.items()}
         triggers_yaml = yaml.dump(triggers_dict, default_flow_style=False).rstrip()
 
         skills = []
-        prev_name: str | None = None
-        for name in skill_names:
-            skills.append(
-                {
-                    "name": name,
-                    "needs": json.dumps([prev_name]) if prev_name else None,
-                }
-            )
-            prev_name = name
+        prev_stage_names: list[str] | None = None
+        for stage in stages:
+            for name in stage:
+                skills.append(
+                    {
+                        "name": name,
+                        "needs": json.dumps(prev_stage_names)
+                        if prev_stage_names
+                        else None,
+                    }
+                )
+            prev_stage_names = list(stage)
 
         template = self._env.get_template("chain.yml.j2")
         return template.render(

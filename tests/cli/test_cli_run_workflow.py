@@ -177,3 +177,54 @@ def test_run_workflow_chain_stops_on_second_skill_not_found(
     runner = CliRunner()
     result = runner.invoke(cli, ["run-workflow", "partial", "--dry-run"])
     assert result.exit_code != 0
+
+
+def test_run_workflow_dry_run_parallel_stage(
+    fake_repo: Path,
+    make_skill: Callable[..., Path],
+) -> None:
+    """Parallel stage in dry-run shows grouping label and all outputs."""
+    make_skill("lint", {"name": "lint", "description": "Lint"}, "Lint body")
+    make_skill("types", {"name": "types", "description": "Types"}, "Types body")
+    make_skill("test", {"name": "test", "description": "Test"}, "Test body")
+    _write_config(
+        fake_repo,
+        {
+            "staged": {
+                "triggers": {},
+                "skills": [["lint", "types"], "test"],
+            }
+        },
+    )
+    runner = CliRunner()
+    result = runner.invoke(cli, ["run-workflow", "staged", "--dry-run"])
+    assert result.exit_code == 0
+    assert "Lint body" in result.output
+    assert "Types body" in result.output
+    assert "Test body" in result.output
+    assert "sequential locally" in result.output.lower()
+    assert "completed successfully" in result.output
+
+
+def test_run_workflow_parallel_stage_missing_skill(
+    fake_repo: Path,
+    make_skill: Callable[..., Path],
+) -> None:
+    """Missing skill in parallel stage reports error."""
+    make_skill("lint", {"name": "lint", "description": "Lint"}, "Lint body")
+    _write_config(
+        fake_repo,
+        {
+            "broken": {
+                "triggers": {},
+                "skills": [["lint", "missing-skill"]],
+            }
+        },
+    )
+    runner = CliRunner()
+    result = runner.invoke(cli, ["run-workflow", "broken", "--dry-run"])
+    assert result.exit_code != 0
+    assert (
+        "not found" in result.output.lower()
+        or "not found" in (result.output + str(result.exception)).lower()
+    )

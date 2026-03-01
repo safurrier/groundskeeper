@@ -6,7 +6,6 @@ import shutil
 from pathlib import Path
 
 import click
-import yaml
 
 from groundskeeper.adapters import list_all_skills, resolve_skill
 from groundskeeper.adapters.builtin_store import BuiltinSkillStore
@@ -14,13 +13,19 @@ from groundskeeper.adapters.claude_code import ClaudeCodeRunner
 from groundskeeper.adapters.dry_run import DryRunRunner
 from groundskeeper.adapters.github_actions import GitHubActionsProvider
 from groundskeeper.adapters.local_store import LocalSkillStore
-from groundskeeper.domain.config import get_workflow, load_config
+from groundskeeper.domain.config import (
+    ParallelGroup,
+    SkillRef,
+    get_workflow,
+    get_workflows,
+    load_config,
+)
 from groundskeeper.domain.errors import (
     ConfigError,
     SkillNotFoundError,
     SkillValidationError,
 )
-from groundskeeper.domain.models import RunContext
+from groundskeeper.domain.models import RunContext, RunResult
 from groundskeeper.domain.parser import parse_skill_file
 
 
@@ -323,7 +328,7 @@ def generate() -> None:
 
 def _generate_workflows(cwd: Path, config_path: Path) -> None:
     """Generate GitHub Actions workflows from config."""
-    config = yaml.safe_load(config_path.read_text())
+    config = load_config(config_path)
 
     ci = config.get("ci", "github-actions")
     if ci != "github-actions":
@@ -338,29 +343,31 @@ def _generate_workflows(cwd: Path, config_path: Path) -> None:
     reusable_path.write_text(provider.generate_reusable_workflow())
     click.echo(f"  Generated {reusable_path.relative_to(cwd)}")
 
-    # Generate caller workflows
-    workflows = config.get("workflows", {})
-    for wf_name, wf_config in workflows.items():
-        triggers = wf_config.get("triggers", {})
-        skills = wf_config.get("skills", [])
-
-        if len(skills) == 1:
-            # Single skill — simple caller
+    # Generate caller workflows using domain model
+    for workflow in get_workflows(config):
+        all_refs = workflow.all_skill_refs
+        if len(all_refs) == 1:
             caller_yaml = provider.generate_caller(
-                skill_name=skills[0],
-                triggers=triggers,
+                skill_name=all_refs[0].name,
+                triggers=workflow.triggers,
             )
-            caller_path = wf_dir / f"gk_{wf_name}.yml"
+            caller_path = wf_dir / f"gk_{workflow.name}.yml"
             caller_path.write_text(caller_yaml)
             click.echo(f"  Generated {caller_path.relative_to(cwd)}")
         else:
-            # Multi-skill chain — single workflow with multiple jobs
+            # Build stage groups for CI (parallel within stage, sequential across)
+            stages: list[list[str]] = []
+            for step in workflow.steps:
+                if isinstance(step, SkillRef):
+                    stages.append([step.name])
+                else:
+                    stages.append([s.name for s in step.skills])
             chain_yaml = provider.generate_chain_workflow(
-                workflow_name=wf_name,
-                triggers=triggers,
-                skill_names=skills,
+                workflow_name=workflow.name,
+                triggers=workflow.triggers,
+                stages=stages,
             )
-            chain_path = wf_dir / f"gk_{wf_name}.yml"
+            chain_path = wf_dir / f"gk_{workflow.name}.yml"
             chain_path.write_text(chain_yaml)
             click.echo(f"  Generated {chain_path.relative_to(cwd)}")
 
@@ -383,14 +390,25 @@ def _generate_workflows(cwd: Path, config_path: Path) -> None:
     is_flag=True,
     help="Skip all permission checks (passes --dangerously-skip-permissions to claude).",
 )
+@click.option(
+    "--parallel",
+    is_flag=True,
+    help="Run parallel groups concurrently (even if they have write-capable tools).",
+)
 @click.pass_context
 def run_workflow(
-    ctx: click.Context, name: str, arguments: str, dry_run: bool, yolo: bool
+    ctx: click.Context,
+    name: str,
+    arguments: str,
+    dry_run: bool,
+    yolo: bool,
+    parallel: bool,
 ) -> None:
-    """Execute a workflow (chain of skills) locally.
+    """Execute a workflow locally.
 
     Reads .groundskeeper/config.yml, looks up the named workflow, and
-    runs each skill in its chain sequentially. Stops on first failure.
+    runs steps sequentially. Parallel groups run concurrently when all
+    skills are read-only, or when --parallel is passed explicitly.
     """
     cwd = Path.cwd()
     config_path = cwd / ".groundskeeper" / "config.yml"
@@ -411,7 +429,7 @@ def run_workflow(
     stores = _get_stores(extra_skill_paths=extra)
 
     if dry_run:
-        runner = DryRunRunner()
+        runner: DryRunRunner | ClaudeCodeRunner = DryRunRunner()
     else:
         runner = ClaudeCodeRunner()
         if not runner.is_available():
@@ -419,35 +437,160 @@ def run_workflow(
                 "claude CLI not found. Install it from https://claude.ai/code"
             )
 
-    click.echo(f"Running workflow: {name} ({len(workflow.steps)} skills)")
+    total = len(workflow.all_skill_refs)
+    click.echo(f"Running workflow: {name} ({total} skills)")
 
-    for i, step in enumerate(workflow.steps, 1):
-        skill = resolve_skill(step.name, stores)  # type: ignore[arg-type]
+    step_num = 0
+    for step in workflow.steps:
+        if isinstance(step, SkillRef):
+            step_num += 1
+            _run_single(
+                step, step_num, total, name, workflow, stores, runner, arguments, yolo
+            )
+        else:
+            # ParallelGroup — decide whether to actually parallelize
+            should_parallel = not dry_run and (
+                parallel or workflow.is_group_read_only(step)
+            )
+            names = ", ".join(s.name for s in step.skills)
+
+            if should_parallel:
+                click.echo(f"\n=== Parallel: [{names}] ===")
+                step_num = _run_group_parallel(
+                    step,
+                    step_num,
+                    total,
+                    name,
+                    workflow,
+                    stores,
+                    runner,
+                    arguments,
+                    yolo,
+                )
+            else:
+                reason = "dry-run" if dry_run else "has write-capable tools"
+                click.echo(f"\n=== [{names}] (sequential locally: {reason}) ===")
+                for ref in step.skills:
+                    step_num += 1
+                    _run_single(
+                        ref,
+                        step_num,
+                        total,
+                        name,
+                        workflow,
+                        stores,
+                        runner,
+                        arguments,
+                        yolo,
+                    )
+
+    click.echo(f"\nWorkflow '{name}' completed successfully.")
+
+
+def _run_single(
+    ref: SkillRef,
+    step_num: int,
+    total: int,
+    workflow_name: str,
+    workflow: object,
+    stores: list[LocalSkillStore | BuiltinSkillStore],
+    runner: DryRunRunner | ClaudeCodeRunner,
+    arguments: str,
+    yolo: bool,
+) -> None:
+    """Run a single skill ref and handle output/failure."""
+    from groundskeeper.domain.config import Workflow
+
+    skill = resolve_skill(ref.name, stores)  # type: ignore[arg-type]
+    if skill is None:
+        raise click.ClickException(
+            f"Skill not found: {ref.name} "
+            f"(step {step_num}/{total} in workflow '{workflow_name}')"
+        )
+
+    click.echo(f"\n--- [{step_num}/{total}] {ref.name} ---")
+    assert isinstance(workflow, Workflow)
+    context = RunContext(
+        skill=skill,
+        arguments=arguments,
+        skip_permissions=yolo,
+        allowed_tools_override=workflow.effective_tools(ref),
+    )
+    result = runner.run(context)
+
+    if result.output:
+        click.echo(result.output)
+    if result.error:
+        click.echo(result.error, err=True)
+
+    if not result.success:
+        click.echo(f"\nWorkflow failed at step {step_num}: {ref.name}")
+        raise SystemExit(result.exit_code or 1)
+
+
+def _run_group_parallel(
+    group: ParallelGroup,
+    step_num_start: int,
+    total: int,
+    workflow_name: str,
+    workflow: object,
+    stores: list[LocalSkillStore | BuiltinSkillStore],
+    runner: DryRunRunner | ClaudeCodeRunner,
+    arguments: str,
+    yolo: bool,
+) -> int:
+    """Run all skills in a parallel group concurrently. Returns updated step_num."""
+    from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+
+    from groundskeeper.domain.config import Workflow
+
+    assert isinstance(workflow, Workflow)
+
+    # Resolve all skills upfront
+    contexts: list[tuple[SkillRef, RunContext]] = []
+    for i, ref in enumerate(group.skills):
+        skill = resolve_skill(ref.name, stores)  # type: ignore[arg-type]
         if skill is None:
             raise click.ClickException(
-                f"Skill not found: {step.name} "
-                f"(step {i}/{len(workflow.steps)} in workflow '{name}')"
+                f"Skill not found: {ref.name} "
+                f"(step {step_num_start + i + 1}/{total} in workflow '{workflow_name}')"
             )
-
-        click.echo(f"\n--- [{i}/{len(workflow.steps)}] {step.name} ---")
         context = RunContext(
             skill=skill,
             arguments=arguments,
             skip_permissions=yolo,
-            allowed_tools_override=workflow.effective_tools(step),
+            allowed_tools_override=workflow.effective_tools(ref),
         )
-        result = runner.run(context)
+        contexts.append((ref, context))
 
-        if result.output:
-            click.echo(result.output)
-        if result.error:
-            click.echo(result.error, err=True)
+    # Run concurrently
+    failures: list[tuple[str, RunResult]] = []
+    step_num = step_num_start
+    with ThreadPoolExecutor(max_workers=len(contexts)) as executor:
+        future_to_ref: dict[Future[RunResult], SkillRef] = {}
+        for ref, context in contexts:
+            future_to_ref[executor.submit(runner.run, context)] = ref
 
-        if not result.success:
-            click.echo(f"\nWorkflow failed at step {i}: {step.name}")
-            raise SystemExit(result.exit_code or 1)
+        for future in as_completed(future_to_ref):
+            ref = future_to_ref[future]
+            result = future.result()
+            step_num += 1
 
-    click.echo(f"\nWorkflow '{name}' completed successfully.")
+            click.echo(f"\n--- [{step_num}/{total}] {ref.name} ---")
+            if result.output:
+                click.echo(result.output)
+            if result.error:
+                click.echo(result.error, err=True)
+
+            if not result.success:
+                failures.append((ref.name, result))
+
+    if failures:
+        failed = ", ".join(n for n, _ in failures)
+        click.echo(f"\nWorkflow failed at parallel group: {failed}")
+        raise SystemExit(failures[0][1].exit_code or 1)
+
+    return step_num
 
 
 @cli.command()
