@@ -1,0 +1,174 @@
+[env]
+MODULE_NAME = "groundskeeper"
+DOCS_PORT = "8000"
+PYTHON_VERSION = "3.12"
+
+# Development Setup
+####################
+
+[tasks.setup]
+description = "Install dependencies"
+run = [
+    "which uv > /dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh",
+    "uv sync --all-extras",
+]
+
+[tasks.clean]
+description = "Remove build artifacts"
+run = [
+    "find . -name '*.pyc' -exec rm -f {} +",
+    "find . -name '__pycache__' -exec rm -fr {} +",
+    "rm -f .coverage .coverage.*",
+]
+
+# Quality Checks
+#################
+
+[tasks.test]
+description = "Run tests with coverage"
+depends = ["setup"]
+run = "uv run -m pytest tests --cov=$MODULE_NAME --cov-report=term-missing"
+
+[tasks.ty]
+description = "Run type checking"
+depends = ["setup"]
+run = "uv run ty check $MODULE_NAME"
+
+[tasks.lint]
+description = "Run ruff linter with auto-fix"
+depends = ["setup"]
+run = "uv run -m ruff check --fix $MODULE_NAME tests"
+
+[tasks.format]
+description = "Run ruff formatter"
+depends = ["setup"]
+run = "uv run -m ruff format $MODULE_NAME tests"
+
+[tasks.check]
+description = "Run all quality checks"
+depends = ["lint", "format", "ty", "test"]
+
+# E2E Tests
+#############
+
+[tasks."test:e2e"]
+description = "Run e2e tests (requires gk installed)"
+depends = ["setup"]
+run = "uv run -m pytest tests/e2e -m e2e -v --timeout=120"
+
+[tasks."test:all"]
+description = "Run all tests including e2e"
+depends = ["setup"]
+run = "uv run -m pytest tests -m '' -v --timeout=120"
+
+# Install
+##########
+
+[tasks.install]
+description = "Install gk CLI via uv tool"
+run = "uv tool install . --force"
+
+# Documentation
+################
+
+[tasks."docs:install"]
+description = "Install documentation dependencies"
+depends = ["setup"]
+run = "uv sync --group dev"
+
+[tasks."docs:build"]
+description = "Build documentation site"
+depends = ["docs:install"]
+run = [
+    "echo 'Building documentation...'",
+    "uv run mkdocs build --strict",
+    "echo 'Documentation built successfully'",
+]
+
+[tasks."docs:serve"]
+description = "Serve documentation locally with live reload"
+depends = ["docs:install"]
+run = "uv run mkdocs serve --dev-addr 0.0.0.0:$DOCS_PORT"
+
+[tasks."docs:check"]
+description = "Check documentation build"
+depends = ["docs:build"]
+run = [
+    "echo \"Site size: $(du -sh site/ | cut -f1)\"",
+    "echo \"Pages built: $(find site/ -name '*.html' | wc -l)\"",
+]
+
+[tasks."docs:clean"]
+description = "Clean documentation build files"
+run = "rm -rf site/ .cache/"
+
+# Local CI Testing with act
+############################
+
+[tasks."ci:list"]
+description = "List available GitHub Actions workflows"
+run = "act -l"
+
+[tasks."ci:local"]
+description = "Run CI checks locally via act"
+run = """
+echo "Running local CI checks..."
+act pull_request \
+  -W .github/workflows/tests.yml \
+  -j checks \
+  --container-daemon-socket - \
+  --container-architecture linux/amd64 \
+  -P ubuntu-latest=catthehacker/ubuntu:act-22.04
+"""
+
+[tasks."ci:docs"]
+description = "Run documentation build check locally via act"
+run = """
+act pull_request \
+  -W .github/workflows/docs.yml \
+  -j build-check \
+  --container-daemon-socket - \
+  --container-architecture linux/amd64 \
+  -P ubuntu-latest=catthehacker/ubuntu:act-22.04
+"""
+
+[tasks."ci:debug"]
+description = "Run CI debug workflow locally via act"
+run = """
+act workflow_dispatch \
+  -W .github/workflows/ci-debug.yml \
+  --container-daemon-socket - \
+  --container-architecture linux/amd64 \
+  -P ubuntu-latest=catthehacker/ubuntu:act-22.04
+"""
+
+[tasks."ci:clean"]
+description = "Clean up act containers and images"
+run = [
+  "docker ps -a | grep 'act-' | awk '{print $1}' | xargs docker rm -f 2>/dev/null || true",
+  "docker images | grep 'act-' | awk '{print $3}' | xargs docker rmi -f 2>/dev/null || true",
+]
+
+# Container Dev Environment
+############################
+
+[tasks."dev:env"]
+description = "Start a containerized dev environment"
+depends = ["dev:build"]
+run = [
+    "docker compose -f docker/docker-compose.yml down 2>/dev/null || true",
+    "docker compose -f docker/docker-compose.yml up -d dev",
+    "docker exec -ti gk-dev /bin/bash",
+]
+
+[tasks."dev:build"]
+description = "Build dev container"
+run = "docker compose -f docker/docker-compose.yml build"
+
+[tasks."dev:rebuild"]
+description = "Rebuild dev container from scratch"
+run = "docker compose -f docker/docker-compose.yml build --no-cache"
+
+[tasks."dev:down"]
+description = "Stop dev container"
+run = "docker compose -f docker/docker-compose.yml down"

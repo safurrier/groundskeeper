@@ -1,0 +1,42 @@
+name: Code Quality Checks
+
+on:
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install dependencies
+        run: |
+          uv venv
+          uv sync --all-extras
+
+      - name: Run Linter
+        run: uv run -m ruff check groundskeeper tests
+
+      - name: Run Formatter Check
+        run: uv run -m ruff format --check groundskeeper tests
+
+      - name: Run Tests
+        run: uv run -m pytest tests --cov=groundskeeper --cov-report=term-missing --cov-report=xml
+
+      - name: Run Type Checker
+        run: uv run ty check groundskeeper
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        continue-on-error: true
+        with:
+          files: coverage.xml
+          fail_ci_if_error: false

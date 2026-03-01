@@ -1,0 +1,10 @@
+version: 1
+runner: claude-code
+ci: github-actions
+
+workflows:
+  pr-review:
+    triggers:
+      pull_request: [ready_for_review, synchronize, reopened]
+    skills:
+      - codex-code-review

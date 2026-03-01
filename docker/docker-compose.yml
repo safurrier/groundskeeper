@@ -1,0 +1,11 @@
+services:
+  dev:
+    tty: true
+    image: gk-dev
+    container_name: gk-dev
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: /bin/bash
+    volumes:
+      - ../:/workspace:Z
