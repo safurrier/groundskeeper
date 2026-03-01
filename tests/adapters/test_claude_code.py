@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 from unittest.mock import patch
@@ -10,12 +11,17 @@ from groundskeeper.adapters.claude_code import ClaudeCodeRunner
 from groundskeeper.domain.models import RunContext, Skill, SkillSource
 
 
-def _make_context(body: str = "do something", arguments: str = "") -> RunContext:
+def _make_context(
+    body: str = "do something",
+    arguments: str = "",
+    allowed_tools: list[str] | None = None,
+) -> RunContext:
     skill = Skill(
         name="test-skill",
         description="A test skill",
         body=body,
         source=SkillSource(kind="local", path=Path("/fake")),
+        allowed_tools=allowed_tools or [],
     )
     return RunContext(skill=skill, arguments=arguments)
 
@@ -23,10 +29,19 @@ def _make_context(body: str = "do something", arguments: str = "") -> RunContext
 class TestClaudeCodeRunner:
     @patch("groundskeeper.adapters.claude_code.subprocess.run")
     def test_claude_code_success(self, mock_run: object) -> None:
+        stdout = json.dumps(
+            {
+                "result": "output text",
+                "is_error": False,
+                "session_id": "abc",
+                "num_turns": 3,
+                "total_cost_usd": 0.05,
+            }
+        )
         mock_run.return_value = subprocess.CompletedProcess(  # type: ignore[attr-defined]
             args=["claude"],
             returncode=0,
-            stdout="output text",
+            stdout=stdout,
             stderr="",
         )
         context = _make_context()
@@ -35,14 +50,33 @@ class TestClaudeCodeRunner:
         assert result.success is True
         assert result.output == "output text"
         assert result.exit_code == 0
+        assert result.metadata["session_id"] == "abc"
+        assert result.metadata["num_turns"] == 3
+        assert result.metadata["total_cost_usd"] == 0.05
         mock_run.assert_called_once()  # type: ignore[attr-defined]
 
     @patch("groundskeeper.adapters.claude_code.subprocess.run")
-    def test_claude_code_failure(self, mock_run: object) -> None:
+    def test_claude_code_failure_is_error(self, mock_run: object) -> None:
+        stdout = json.dumps({"result": "", "is_error": True})
+        mock_run.return_value = subprocess.CompletedProcess(  # type: ignore[attr-defined]
+            args=["claude"],
+            returncode=0,
+            stdout=stdout,
+            stderr="",
+        )
+        context = _make_context()
+        result = ClaudeCodeRunner().run(context)
+
+        assert result.success is False
+        assert result.exit_code == 0
+
+    @patch("groundskeeper.adapters.claude_code.subprocess.run")
+    def test_claude_code_failure_nonzero_returncode(self, mock_run: object) -> None:
+        stdout = json.dumps({"result": "", "is_error": False})
         mock_run.return_value = subprocess.CompletedProcess(  # type: ignore[attr-defined]
             args=["claude"],
             returncode=1,
-            stdout="",
+            stdout=stdout,
             stderr="error message",
         )
         context = _make_context()
@@ -51,6 +85,77 @@ class TestClaudeCodeRunner:
         assert result.success is False
         assert result.error == "error message"
         assert result.exit_code == 1
+
+    @patch("groundskeeper.adapters.claude_code.subprocess.run")
+    def test_command_includes_json_output_format(self, mock_run: object) -> None:
+        stdout = json.dumps({"result": "ok", "is_error": False})
+        mock_run.return_value = subprocess.CompletedProcess(  # type: ignore[attr-defined]
+            args=["claude"],
+            returncode=0,
+            stdout=stdout,
+            stderr="",
+        )
+        context = _make_context()
+        ClaudeCodeRunner().run(context)
+
+        cmd = mock_run.call_args[0][0]  # type: ignore[attr-defined]
+        assert cmd[0] == "claude"
+        assert "-p" in cmd
+        assert "--output-format" in cmd
+        assert cmd[cmd.index("--output-format") + 1] == "json"
+
+    @patch("groundskeeper.adapters.claude_code.subprocess.run")
+    def test_allowed_tools_in_command(self, mock_run: object) -> None:
+        stdout = json.dumps({"result": "ok", "is_error": False})
+        mock_run.return_value = subprocess.CompletedProcess(  # type: ignore[attr-defined]
+            args=["claude"],
+            returncode=0,
+            stdout=stdout,
+            stderr="",
+        )
+        context = _make_context(allowed_tools=["Read", "Bash"])
+        ClaudeCodeRunner().run(context)
+
+        cmd = mock_run.call_args[0][0]  # type: ignore[attr-defined]
+        # Find all --allowedTools flags and their values
+        allowed: list[str] = []
+        for i, arg in enumerate(cmd):
+            if arg == "--allowedTools":
+                allowed.append(cmd[i + 1])
+        assert allowed == ["Read", "Bash"]
+
+    @patch("groundskeeper.adapters.claude_code.subprocess.run")
+    def test_empty_allowed_tools_not_in_command(self, mock_run: object) -> None:
+        stdout = json.dumps({"result": "ok", "is_error": False})
+        mock_run.return_value = subprocess.CompletedProcess(  # type: ignore[attr-defined]
+            args=["claude"],
+            returncode=0,
+            stdout=stdout,
+            stderr="",
+        )
+        context = _make_context(allowed_tools=[])
+        ClaudeCodeRunner().run(context)
+
+        cmd = mock_run.call_args[0][0]  # type: ignore[attr-defined]
+        assert "--allowedTools" not in cmd
+
+    @patch("groundskeeper.adapters.claude_code.subprocess.run")
+    def test_json_parse_failure_falls_back_to_plain_text(
+        self, mock_run: object
+    ) -> None:
+        mock_run.return_value = subprocess.CompletedProcess(  # type: ignore[attr-defined]
+            args=["claude"],
+            returncode=0,
+            stdout="plain text output, not JSON",
+            stderr="",
+        )
+        context = _make_context()
+        result = ClaudeCodeRunner().run(context)
+
+        assert result.success is True
+        assert result.output == "plain text output, not JSON"
+        assert result.exit_code == 0
+        assert result.metadata == {}
 
     @patch("groundskeeper.adapters.claude_code.subprocess.run")
     def test_claude_code_not_found(self, mock_run: object) -> None:

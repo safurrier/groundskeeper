@@ -36,6 +36,15 @@ Summarize this repository in under 200 words at detail level: $ARGUMENTS
 List the main files and their purpose. Be concise.
 """
 
+GREETING_SKILL = """\
+---
+name: greeting
+description: A simple greeting skill for testing
+---
+
+Say hello $ARGUMENTS
+"""
+
 BASIC_CONFIG = """\
 version: 1
 runner: claude-code
@@ -46,6 +55,19 @@ workflows:
       pull_request: [opened, synchronize]
     skills:
       - repo-summary
+"""
+
+CHAIN_CONFIG = """\
+version: 1
+runner: claude-code
+ci: github-actions
+workflows:
+  full-check:
+    triggers:
+      pull_request: [opened, synchronize]
+    skills:
+      - repo-summary
+      - greeting
 """
 
 
@@ -76,13 +98,17 @@ def e2e_repo(tmp_path: Path) -> Path:
         "def add(a: int, b: int) -> int:\n    return a + b\n"
     )
 
-    # Create skill
+    # Create skills
     skill_dir = tmp_path / ".groundskeeper" / "skills" / "repo-summary"
     skill_dir.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text(REPO_SUMMARY_SKILL)
 
+    greeting_dir = tmp_path / ".groundskeeper" / "skills" / "greeting"
+    greeting_dir.mkdir(parents=True)
+    (greeting_dir / "SKILL.md").write_text(GREETING_SKILL)
+
     # Create config
-    (tmp_path / ".groundskeeper" / "config.yml").write_text(BASIC_CONFIG)
+    (tmp_path / ".groundskeeper" / "config.yml").write_text(CHAIN_CONFIG)
 
     # Initial commit (skip hooks — this is a test fixture, not user code)
     subprocess.run(["git", "add", "."], cwd=tmp_path, capture_output=True, check=True)

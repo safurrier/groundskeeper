@@ -70,6 +70,13 @@ def test_gk_generate_chained_skills(fake_repo: Path):
     assert result.exit_code == 0
 
     wf_dir = fake_repo / ".github" / "workflows"
-    # Should generate separate files for chained skills
-    yml_files = list(wf_dir.glob("gk_review-chain*.yml"))
-    assert len(yml_files) >= 2
+    # Should generate a single chain workflow file (not separate files)
+    chain_path = wf_dir / "gk_review-chain.yml"
+    assert chain_path.exists()
+
+    parsed = yaml.safe_load(chain_path.read_text())
+    # Both skills should be jobs in the same workflow
+    assert "codex-code-review" in parsed["jobs"]
+    assert "context-files" in parsed["jobs"]
+    # Second skill depends on the first
+    assert parsed["jobs"]["context-files"]["needs"] == ["codex-code-review"]

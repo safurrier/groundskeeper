@@ -13,8 +13,9 @@ from groundskeeper.domain.parser import parse_skill_file
 class LocalSkillStore:
     """Scans .groundskeeper/skills/ for skill directories."""
 
-    def __init__(self, skills_dir: Path) -> None:
+    def __init__(self, skills_dir: Path, source_kind: str = "local") -> None:
         self._skills_dir = skills_dir
+        self._source_kind = source_kind
 
     def list_skills(self) -> list[Skill]:
         """Scan all subdirectories for SKILL.md files.
@@ -32,7 +33,9 @@ class LocalSkillStore:
             if not skill_file.is_file():
                 continue
             try:
-                skills.append(parse_skill_file(skill_file, source_kind="local"))
+                skills.append(
+                    parse_skill_file(skill_file, source_kind=self._source_kind)
+                )
             except (SkillValidationError, Exception) as exc:
                 print(
                     f"Warning: skipping invalid skill at {skill_file}: {exc}",
@@ -43,16 +46,26 @@ class LocalSkillStore:
     def get_skill(self, name: str) -> Skill | None:
         """Look up a skill by name.
 
+        First tries a direct path lookup (directory name == skill name).
+        Falls back to scanning all subdirectories and matching by the
+        ``name`` field in SKILL.md frontmatter.
+
         Args:
-            name: The skill name (directory name).
+            name: The skill name (from frontmatter, not necessarily the dir name).
 
         Returns:
             The parsed Skill, or None if not found.
         """
+        # Fast path: directory name matches skill name
         skill_file = self._skills_dir / name / "SKILL.md"
-        if not skill_file.is_file():
-            return None
-        try:
-            return parse_skill_file(skill_file, source_kind="local")
-        except SkillValidationError:
-            return None
+        if skill_file.is_file():
+            try:
+                return parse_skill_file(skill_file, source_kind=self._source_kind)
+            except SkillValidationError:
+                pass
+
+        # Slow path: scan all dirs and match by frontmatter name
+        for skill in self.list_skills():
+            if skill.name == name:
+                return skill
+        return None

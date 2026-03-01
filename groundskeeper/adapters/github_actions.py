@@ -42,6 +42,35 @@ class GitHubActionsProvider:
             depends_on=json.dumps(depends_on) if depends_on else None,
         )
 
+    def generate_chain_workflow(
+        self,
+        workflow_name: str,
+        triggers: dict[str, list[str]],
+        skill_names: list[str],
+    ) -> str:
+        """Generate a single workflow file with chained jobs for multiple skills."""
+        triggers_dict = {k: {"types": v} for k, v in triggers.items()}
+        triggers_yaml = yaml.dump(triggers_dict, default_flow_style=False).rstrip()
+
+        skills = []
+        prev_name: str | None = None
+        for name in skill_names:
+            skills.append(
+                {
+                    "name": name,
+                    "needs": json.dumps([prev_name]) if prev_name else None,
+                }
+            )
+            prev_name = name
+
+        template = self._env.get_template("chain.yml.j2")
+        return template.render(
+            name=f"GK {workflow_name}",
+            workflow_name=workflow_name,
+            triggers_yaml=triggers_yaml,
+            skills=skills,
+        )
+
     @property
     def workflow_directory(self) -> str:
         return ".github/workflows"

@@ -151,6 +151,70 @@ class TestGkGenerateE2E:
 
 
 @requires_gk
+class TestGkRunWorkflowE2E:
+    """Test `gk run-workflow --dry-run` via real binary."""
+
+    def test_run_workflow_dry_run(self, e2e_repo: Path) -> None:
+        result = run_gk("run-workflow", "full-check", "--dry-run", cwd=e2e_repo)
+        assert result.returncode == 0
+        assert "repo-summary" in result.stdout
+        assert "greeting" in result.stdout
+        assert "completed successfully" in result.stdout
+
+    def test_run_workflow_dry_run_with_args(self, e2e_repo: Path) -> None:
+        result = run_gk(
+            "run-workflow",
+            "full-check",
+            "--dry-run",
+            "--args",
+            "brief",
+            cwd=e2e_repo,
+        )
+        assert result.returncode == 0
+        assert "brief" in result.stdout
+
+    def test_run_workflow_nonexistent(self, e2e_repo: Path) -> None:
+        result = run_gk("run-workflow", "nope", "--dry-run", cwd=e2e_repo)
+        assert result.returncode != 0
+
+
+@requires_gk
+class TestGkSkillPathE2E:
+    """Test --skill-path via real binary."""
+
+    def test_list_with_skill_path(self, e2e_repo: Path, tmp_path: Path) -> None:
+        # Create an external skill in a separate directory
+        ext_dir = tmp_path / "external-skills"
+        ext_skill_dir = ext_dir / "ext-hello"
+        ext_skill_dir.mkdir(parents=True)
+        (ext_skill_dir / "SKILL.md").write_text(
+            "---\nname: ext-hello\ndescription: External greeting\n---\n\nHello from external!\n"
+        )
+        result = run_gk("--skill-path", str(ext_dir), "list", cwd=e2e_repo)
+        assert result.returncode == 0
+        assert "ext-hello" in result.stdout
+        assert "external" in result.stdout
+
+    def test_run_dry_run_with_skill_path(self, e2e_repo: Path, tmp_path: Path) -> None:
+        ext_dir = tmp_path / "external-skills"
+        ext_skill_dir = ext_dir / "ext-hello"
+        ext_skill_dir.mkdir(parents=True)
+        (ext_skill_dir / "SKILL.md").write_text(
+            "---\nname: ext-hello\ndescription: External greeting\n---\n\nHello from external!\n"
+        )
+        result = run_gk(
+            "--skill-path",
+            str(ext_dir),
+            "run",
+            "ext-hello",
+            "--dry-run",
+            cwd=e2e_repo,
+        )
+        assert result.returncode == 0
+        assert "Hello from external!" in result.stdout
+
+
+@requires_gk
 @requires_claude
 class TestGkRunClaudeE2E:
     """Test `gk run` with real Claude execution.

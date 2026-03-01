@@ -16,3 +16,7 @@ class SkillValidationError(Exception):
         self.path = path
         self.message = message
         super().__init__(f"Invalid skill at {path}: {message}")
+
+
+class ConfigError(Exception):
+    """Raised when config.yml is missing or invalid."""

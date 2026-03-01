@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import yaml
 from click.testing import CliRunner
 
 from groundskeeper.cli.main import cli
@@ -45,3 +46,21 @@ def test_gk_list_local_shadows_builtin(fake_repo: Path, make_skill):
     review_lines = [line for line in output_lines if "codex-code-review" in line]
     assert len(review_lines) == 1
     assert "local" in review_lines[0]
+
+
+def test_gk_list_shows_external_skills(fake_repo: Path, tmp_path: Path):
+    """--skill-path adds external skills labelled [external]."""
+    ext_dir = tmp_path / "ext-skills"
+    skill_subdir = ext_dir / "ext-skill"
+    skill_subdir.mkdir(parents=True)
+    fm = yaml.dump(
+        {"name": "ext-skill", "description": "An external skill"},
+        default_flow_style=False,
+    )
+    (skill_subdir / "SKILL.md").write_text(f"---\n{fm}---\n\nDo external things.")
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["--skill-path", str(ext_dir), "list"])
+    assert result.exit_code == 0, result.output
+    assert "ext-skill" in result.output
+    assert "[external]" in result.output

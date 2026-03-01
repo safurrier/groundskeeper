@@ -17,3 +17,4 @@ htmlcov/
 site/
 .cache/
 .DS_Store
+.groundskeeper/

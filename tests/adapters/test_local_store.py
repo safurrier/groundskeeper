@@ -81,3 +81,24 @@ def test_local_store_empty_dir(skill_dir: Path):
     """list_skills() returns [] for an empty directory."""
     store = LocalSkillStore(skill_dir)
     assert store.list_skills() == []
+
+
+def test_local_store_get_skill_by_frontmatter_name(skill_dir: Path, make_skill):
+    """get_skill() finds a skill even when the directory name differs from the frontmatter name."""
+    # Directory is "prefix-my-skill" but frontmatter name is "my-skill"
+    make_skill(
+        "prefix-my-skill",
+        {"name": "my-skill", "description": "Mismatched dir name"},
+        "Found by frontmatter name.",
+    )
+
+    store = LocalSkillStore(skill_dir)
+
+    # Direct path lookup would fail (no "my-skill" directory)
+    assert not (skill_dir / "my-skill").exists()
+
+    # But get_skill should still find it via frontmatter scan
+    skill = store.get_skill("my-skill")
+    assert skill is not None
+    assert skill.name == "my-skill"
+    assert skill.body == "Found by frontmatter name."

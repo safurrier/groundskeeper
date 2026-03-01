@@ -11,7 +11,7 @@ from typing import Any, Literal
 class SkillSource:
     """Where a skill was loaded from."""
 
-    kind: Literal["local", "builtin"]
+    kind: Literal["local", "builtin", "external"]
     path: Path
 
 
@@ -51,3 +51,4 @@ class RunResult:
     output: str = ""
     error: str = ""
     exit_code: int = 0
+    metadata: dict[str, Any] = field(default_factory=dict)
