@@ -1,3 +1,15 @@
+---
+id: config-and-skills
+title: Config & Skills Deep Reference
+description: >
+  config.yml format, allowed-tools precedence, SKILL.md frontmatter spec,
+  directory layout, $ARGUMENTS substitution, and skill resolution order.
+index:
+  - id: groundskeeperconfigyml
+  - id: skillmd-format
+  - id: skill-resolution-order
+---
+
 # Config & Skills Deep Reference
 
 ## .groundskeeper/config.yml

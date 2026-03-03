@@ -1,3 +1,17 @@
+---
+id: getting-started
+title: Getting Started
+description: >
+  Installation, project initialization, configuration, skill creation,
+  and core workflow commands for Groundskeeper.
+index:
+  - id: installation
+  - id: initialize-a-project
+  - id: configuration
+  - id: creating-a-skill
+  - id: workflow-commands
+---
+
 # Getting Started
 
 ## Installation

@@ -1,3 +1,13 @@
+---
+id: future-work
+title: Future Work
+description: >
+  Planned features: worktree-isolated parallel execution and
+  additional agent runner implementations (Codex, Agent SDK, Jules).
+index:
+  - id: additional-agent-runners
+---
+
 # Future Work
 
 ## Worktree-isolated parallel execution (`--parallel --isolate`)

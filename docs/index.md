@@ -1,3 +1,16 @@
+---
+id: index
+title: Groundskeeper
+description: >
+  Project homepage: what Groundskeeper is, quick start commands,
+  core concepts, and how skills-to-CI workflow operates.
+index:
+  - id: what-is-groundskeeper
+  - id: quick-start
+  - id: concepts
+  - id: how-it-works
+---
+
 # Groundskeeper
 
 Script AI agents to run on your PRs.

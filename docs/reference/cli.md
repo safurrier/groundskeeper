@@ -1,3 +1,19 @@
+---
+id: cli-reference
+title: CLI Reference
+description: >
+  Complete reference for all gk CLI commands: init, list, show, run,
+  check, generate, and render with options and usage examples.
+index:
+  - id: gk-init
+  - id: gk-list
+  - id: gk-show-name
+  - id: gk-run-name
+  - id: gk-check-name
+  - id: gk-generate
+  - id: gk-render-name
+---
+
 # CLI Reference
 
 ## `gk init`

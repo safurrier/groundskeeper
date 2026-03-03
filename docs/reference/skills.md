@@ -1,3 +1,15 @@
+---
+id: skills-reference
+title: Skills Reference
+description: >
+  Skill format specification: SKILL.md structure, frontmatter fields,
+  directory layout, resolution order, and built-in skill descriptions.
+index:
+  - id: skill-format
+  - id: resolution-order
+  - id: built-in-skills
+---
+
 # Skills Reference
 
 ## Skill Format
