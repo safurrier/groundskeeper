@@ -1,3 +1,17 @@
+---
+id: architecture
+title: Architecture Deep Reference
+description: >
+  Ports-and-adapters design, domain models, execution flow,
+  and CI generation pipeline for the Groundskeeper system.
+index:
+  - id: ports-and-adapters
+  - id: domain-models-groundskeeperdomainmodelspy
+  - id: workflow-models-groundskeeperdomainconfigpy
+  - id: execution-flow
+  - id: ci-generation-flow
+---
+
 # Architecture Deep Reference
 
 ## Ports and Adapters

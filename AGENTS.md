@@ -13,7 +13,7 @@ groundskeeper/           # Python package (the library + CLI)
   protocols.py           # Protocol interfaces (SkillStore, AgentRunner, CIProvider)
 tests/                   # Mirrors source layout; e2e/ has installed-CLI tests
 .groundskeeper/          # User config: config.yml + skills/
-ai_agent_docs/           # Deep-reference docs for agent onboarding
+docs/AGENTS.md           # Agent routing index for docs/
 docs/                    # MkDocs Material site
 docker/                  # Dev container setup
 mise.toml                # Task runner config (all commands below)
@@ -83,21 +83,33 @@ Format: YAML frontmatter (`name`, `description`, `triggers`, `allowed-tools`, `t
 - Skill names must be kebab-case (validated by parser regex)
 - Skill resolution order: local → external (--skill-path) → builtin (first-match wins)
 - `ClaudeCodeRunner` passes `--allowedTools` from skill frontmatter (or workflow override) and parses JSON output
-- Workflows in `.groundskeeper/config.yml` support per-step and workflow-level `allowed-tools` overrides (see `ai_agent_docs/config-and-skills.md`)
+- Workflows in `.groundskeeper/config.yml` support per-step and workflow-level `allowed-tools` overrides (see `docs/config-and-skills.md`)
 - Multi-skill CI workflows generate a single GitHub Actions file with chained jobs (stages run in parallel within, sequential across)
 - Parallel groups in workflows auto-parallelize locally only when all skills are read-only; use `--parallel` to force
 - `--yolo` flag skips all permission checks (`--dangerously-skip-permissions`)
 - `pytest` excludes `e2e` marker by default (`addopts = "-m 'not e2e'"`)
 - ty is strict: warnings are errors
 
-## Reference Docs
+## Task-Specific Docs
 
-Cross-cutting docs in `ai_agent_docs/` (load as needed):
-- `ai_agent_docs/config-and-skills.md` — config.yml format, skill frontmatter spec, allowed-tools precedence
-- `ai_agent_docs/architecture.md` — ports-and-adapters flow, domain model relationships, execution pipeline
+### Cross-cutting docs in `docs/`
 
-Authoritative sources:
-- `docs/reference/skills.md` — user-facing skill authoring guide
-- `docs/reference/cli.md` — CLI reference
-- `groundskeeper/domain/parser.py` — authoritative parsing logic for SKILL.md
-- `groundskeeper/domain/config.py` — config loading, workflow/step model, tool precedence logic
+| Doc | Topic |
+|-----|-------|
+| `docs/AGENTS.md` | Agent routing index for all docs |
+| `docs/architecture.md` | Ports-and-adapters flow, domain model relationships, execution pipeline |
+| `docs/config-and-skills.md` | config.yml format, skill frontmatter spec, allowed-tools precedence |
+| `docs/future-work.md` | Planned features: worktree isolation, additional agent runners |
+
+### Reference
+
+| Doc | Topic |
+|-----|-------|
+| `docs/reference/skills.md` | User-facing skill authoring guide |
+| `docs/reference/cli.md` | CLI reference |
+| `docs/reference/api.md` | Auto-generated API docs |
+
+## Key References
+
+- `groundskeeper/domain/parser.py` -- authoritative parsing logic for SKILL.md
+- `groundskeeper/domain/config.py` -- config loading, workflow/step model, tool precedence logic
