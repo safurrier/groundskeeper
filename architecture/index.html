@@ -6,7 +6,8 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
-        <meta name="description" content="Script AI agents to run on your PRs">
+        <meta name="description" content="Ports-and-adapters design, domain models, execution flow, and CI generation pipeline for the Groundskeeper system.
+">
       
       
         <meta name="author" content="safurrier">
@@ -23,7 +24,7 @@
     
     
       
-        <title>Future Work - Groundskeeper</title>
+        <title>Architecture Deep Reference - Groundskeeper</title>
       
     
     
@@ -76,7 +77,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#future-work" class="md-skip">
+        <a href="#architecture-deep-reference" class="md-skip">
           Skip to content
         </a>
       
@@ -112,7 +113,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Future Work
+              Architecture Deep Reference
             
           </span>
         </div>
@@ -522,10 +523,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#worktree-isolated-parallel-execution-parallel-isolate" class="md-nav__link">
+  <a href="#ports-and-adapters" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Worktree-isolated parallel execution (--parallel --isolate)
+        Ports and Adapters
       
     </span>
   </a>
@@ -533,10 +534,43 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#additional-agent-runners" class="md-nav__link">
+  <a href="#domain-models-groundskeeperdomainmodelspy" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Additional agent runners
+        Domain Models (groundskeeper/domain/models.py)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#workflow-models-groundskeeperdomainconfigpy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Workflow Models (groundskeeper/domain/config.py)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#execution-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Execution Flow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ci-generation-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CI Generation Flow
       
     </span>
   </a>
@@ -560,31 +594,77 @@
 
 
 
-<h1 id="future-work">Future Work<a class="headerlink" href="#future-work" title="Permanent link">&para;</a></h1>
-<h2 id="worktree-isolated-parallel-execution-parallel-isolate">Worktree-isolated parallel execution (<code>--parallel --isolate</code>)<a class="headerlink" href="#worktree-isolated-parallel-execution-parallel-isolate" title="Permanent link">&para;</a></h2>
-<p>Currently, parallel stages run skills in the same working directory via ThreadPoolExecutor. This is safe for read-only skills but risky for writers. Full isolation would give each skill in a parallel group its own git worktree:</p>
+<h1 id="architecture-deep-reference">Architecture Deep Reference<a class="headerlink" href="#architecture-deep-reference" title="Permanent link">&para;</a></h1>
+<h2 id="ports-and-adapters">Ports and Adapters<a class="headerlink" href="#ports-and-adapters" title="Permanent link">&para;</a></h2>
+<p>The domain layer has zero external dependencies. All I/O goes through protocol interfaces in <code>groundskeeper/protocols.py</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Protocol</th>
+<th>Purpose</th>
+<th>Implementations</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>SkillStore</code></td>
+<td>Load/list skills</td>
+<td><code>LocalSkillStore</code> (<code>.groundskeeper/skills/</code> + external paths), <code>BuiltinSkillStore</code> (shipped)</td>
+</tr>
+<tr>
+<td><code>AgentRunner</code></td>
+<td>Execute a skill</td>
+<td><code>ClaudeCodeRunner</code> (shells out to <code>claude</code> CLI), <code>DryRunRunner</code> (prints prompt)</td>
+</tr>
+<tr>
+<td><code>CIProvider</code></td>
+<td>Generate CI YAML</td>
+<td><code>GitHubActionsProvider</code> (Jinja2 templates)</td>
+</tr>
+</tbody>
+</table>
+<h2 id="domain-models-groundskeeperdomainmodelspy">Domain Models (<code>groundskeeper/domain/models.py</code>)<a class="headerlink" href="#domain-models-groundskeeperdomainmodelspy" title="Permanent link">&para;</a></h2>
 <ul>
-<li><code>git worktree add .claude/worktrees/&lt;skill&gt;-&lt;timestamp&gt;</code> per skill</li>
-<li>Run Claude in each worktree simultaneously</li>
-<li>After completion, apply each worktree's diff back to the main tree</li>
-<li>Detect and report merge conflicts</li>
+<li><strong><code>Skill</code></strong> — parsed SKILL.md: name, description, body, source, allowed_tools, triggers, metadata</li>
+<li><strong><code>SkillSource</code></strong> — where it came from: <code>kind</code> (local/builtin/external) + <code>path</code></li>
+<li><strong><code>RunContext</code></strong> — execution context: skill + arguments + working_directory + skip_permissions + allowed_tools_override</li>
+<li><strong><code>RunResult</code></strong> — output: success, output text, error text, exit_code, metadata</li>
 </ul>
-<p>Claude Code's agent teams feature (Feb 2026) uses this pattern via <code>isolation: worktree</code> on subagents. The complexity is in merging — multiple agents editing the same file produces conflicts that need resolution (auto-merge, retry with rebase, or escalation).</p>
-<p>See: https://docs.anthropic.com/en/docs/claude-code/agent-teams</p>
-<h2 id="additional-agent-runners">Additional agent runners<a class="headerlink" href="#additional-agent-runners" title="Permanent link">&para;</a></h2>
-<p>The <code>AgentRunner</code> protocol (<code>groundskeeper/protocols.py</code>) is runner-agnostic. Currently only <code>ClaudeCodeRunner</code> (shells out to <code>claude -p</code>) and <code>DryRunRunner</code> exist. Future runners:</p>
+<h2 id="workflow-models-groundskeeperdomainconfigpy">Workflow Models (<code>groundskeeper/domain/config.py</code>)<a class="headerlink" href="#workflow-models-groundskeeperdomainconfigpy" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>OpenAI Codex</strong> — <code>codex</code> CLI with similar subprocess invocation</li>
-<li><strong>Anthropic Claude Agent SDK</strong> — Python-native async runner using <code>claude-agent-sdk</code> package instead of subprocess. Enables streaming, structured outputs, turn limits, budget caps, and permission callbacks.</li>
-<li><strong>Google Jules / other agents</strong> — same pattern, different CLI</li>
+<li><strong><code>SkillRef</code></strong> — reference to a skill with optional per-step <code>allowed_tools</code></li>
+<li><strong><code>ParallelGroup</code></strong> — group of <code>SkillRef</code>s that can run concurrently</li>
+<li><strong><code>Step</code></strong> = <code>SkillRef | ParallelGroup</code> — a workflow step</li>
+<li><strong><code>Workflow</code></strong> — named sequence of steps with triggers and optional workflow-level <code>allowed_tools</code></li>
 </ul>
-<p>The <code>runner</code> field in <code>config.yml</code> (<code>runner: claude-code</code>) already exists but is currently ignored. Wiring it up to dispatch to different <code>AgentRunner</code> implementations is straightforward.</p>
+<p>Key method: <code>Workflow.effective_tools(ref)</code> resolves tool precedence (per-step &gt; workflow &gt; skill frontmatter).</p>
+<h2 id="execution-flow">Execution Flow<a class="headerlink" href="#execution-flow" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>CLI (main.py)
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>  → _get_stores() builds [LocalSkillStore, ..., BuiltinSkillStore]
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>  → resolve_skill() iterates stores (first match wins)
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>  → RunContext constructed (with effective_tools from workflow if applicable)
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>  → runner.run(context) → ClaudeCodeRunner shells out:
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>      claude -p &lt;rendered_prompt&gt; --output-format json [--allowedTools ...] [--dangerously-skip-permissions]
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>  → JSON response parsed into RunResult
+</code></pre></div>
+<p>For workflows: steps execute sequentially. <code>ParallelGroup</code> steps use <code>ThreadPoolExecutor</code> when all skills are read-only (no Write/Edit/Bash/NotebookEdit tools) or when <code>--parallel</code> is forced.</p>
+<h2 id="ci-generation-flow">CI Generation Flow<a class="headerlink" href="#ci-generation-flow" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>config.yml → load_config() → get_workflows()
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>  → Single-skill workflow: generate_caller() from caller.yml.j2
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>  → Multi-skill workflow: generate_chain_workflow() from chain.yml.j2
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>      Skills within a stage run in parallel (separate GHA jobs)
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>      Stages are sequential (each waits for the previous)
+</code></pre></div>
+<p>Templates live in <code>groundskeeper/builtins/templates/github_actions/</code>.</p>
 
 
 
 
 
 
+
+  
+  
 
 
 
