@@ -1,13 +1,13 @@
 # Groundskeeper
 
-CLI tool that scripts AI agents to run on PRs. Users define "skills" (YAML-frontmatter + markdown prompt in `SKILL.md` files), and Groundskeeper generates CI workflows (GitHub Actions) to execute them via Claude Code on PR events.
+CLI tool that scripts AI agents to run on PRs and schedules. Users define "skills" (YAML-frontmatter + markdown prompt in `SKILL.md` files), and Groundskeeper generates CI workflows (GitHub Actions) to execute them via Claude Code on PR events, cron schedules, or manual triggers.
 
 ## Repo Map
 
 ```
 groundskeeper/           # Python package (the library + CLI)
   cli/main.py            # Click CLI entry point (`gk` command)
-  domain/                # Core models, parser, errors (no external deps)
+  domain/                # Core models, parser, triggers, errors (no external deps)
   adapters/              # Ports: skill stores, runners, CI providers
   builtins/              # Shipped skills + templates (config, GHA Jinja2)
   protocols.py           # Protocol interfaces (SkillStore, AgentRunner, CIProvider)
@@ -22,7 +22,7 @@ pyproject.toml           # Package metadata, deps, tool config (ruff, ty, pytest
 
 ## Architecture (one paragraph)
 
-Hexagonal/ports-and-adapters. Domain layer (`domain/`) defines `Skill`, `Workflow`, `RunContext`, `RunResult` models, a frontmatter parser, and a config loader. `protocols.py` defines the port interfaces: `SkillStore` (loads skills), `AgentRunner` (executes via Claude Code or dry-run), `CIProvider` (generates CI YAML). Adapters implement these: `LocalSkillStore` reads from `.groundskeeper/skills/` or external paths, `BuiltinSkillStore` reads shipped skills, `ClaudeCodeRunner` shells out to `claude -p` with `--allowedTools` and JSON output parsing, `GitHubActionsProvider` renders Jinja2 templates (including chained workflows). The CLI (`cli/main.py`) wires adapters together. Skill resolution: local → external → builtin (first-match).
+Hexagonal/ports-and-adapters. Domain layer (`domain/`) defines `Skill`, `Workflow`, `RunContext`, `RunResult` models, a typed trigger system (`domain/triggers.py`), a frontmatter parser, and a config loader. `protocols.py` defines the port interfaces: `SkillStore` (loads skills), `AgentRunner` (executes via Claude Code or dry-run), `CIProvider` (generates CI YAML). Adapters implement these: `LocalSkillStore` reads from `.groundskeeper/skills/` or external paths, `BuiltinSkillStore` reads shipped skills, `ClaudeCodeRunner` shells out to `claude -p` with `--allowedTools` and JSON output parsing, `GitHubActionsProvider` renders Jinja2 templates (including chained and scheduled workflows). The CLI (`cli/main.py`) wires adapters together. Skill resolution: local → external → builtin (first-match).
 
 ## Common Commands (mise task runner)
 
@@ -89,6 +89,8 @@ Format: YAML frontmatter (`name`, `description`, `triggers`, `allowed-tools`, `t
 - `--yolo` flag skips all permission checks (`--dangerously-skip-permissions`)
 - `pytest` excludes `e2e` marker by default (`addopts = "-m 'not e2e'"`)
 - ty is strict: warnings are errors
+- Triggers are typed: `EventTrigger`, `ScheduleTrigger`, `ManualTrigger` (see `domain/triggers.py`). Schedule triggers auto-inject `workflow_dispatch` for manual runs.
+- Templates conditionally emit draft-PR checks and PR-specific concurrency groups (only for workflows with `pull_request` triggers)
 
 ## Task-Specific Docs
 
@@ -112,4 +114,5 @@ Format: YAML frontmatter (`name`, `description`, `triggers`, `allowed-tools`, `t
 ## Key References
 
 - `groundskeeper/domain/parser.py` -- authoritative parsing logic for SKILL.md
-- `groundskeeper/domain/config.py` -- config loading, workflow/step model, tool precedence logic
+- `groundskeeper/domain/config.py` -- config loading, workflow/step model, trigger parsing, tool precedence logic
+- `groundskeeper/domain/triggers.py` -- typed trigger system (EventTrigger, ScheduleTrigger, ManualTrigger)
