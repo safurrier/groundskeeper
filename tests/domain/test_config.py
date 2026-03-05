@@ -14,6 +14,12 @@ from groundskeeper.domain.config import (
     load_config,
 )
 from groundskeeper.domain.errors import ConfigError
+from groundskeeper.domain.triggers import (
+    EventTrigger,
+    GitHubEvent,
+    ManualTrigger,
+    ScheduleTrigger,
+)
 
 
 class TestLoadConfig:
@@ -55,7 +61,9 @@ class TestGetWorkflows:
         assert len(wfs) == 1
         assert wfs[0].name == "pr-review"
         assert wfs[0].all_skill_names == ["code-review"]
-        assert wfs[0].triggers == {"pull_request": ["synchronize"]}
+        assert wfs[0].triggers == (
+            EventTrigger(event=GitHubEvent.PULL_REQUEST, types=("synchronize",)),
+        )
 
     def test_multi_skill_workflow(self) -> None:
         config = {
@@ -345,3 +353,113 @@ class TestReadOnlyDetection:
         group = wf.steps[0]
         assert isinstance(group, ParallelGroup)
         assert wf.is_group_read_only(group) is False
+
+
+class TestTriggerParsing:
+    def test_pull_request_trigger(self) -> None:
+        config = {
+            "workflows": {
+                "pr": {
+                    "triggers": {"pull_request": ["synchronize", "reopened"]},
+                    "skills": ["a"],
+                }
+            }
+        }
+        wf = get_workflow(config, "pr")
+        assert wf is not None
+        assert len(wf.triggers) == 1
+        trigger = wf.triggers[0]
+        assert isinstance(trigger, EventTrigger)
+        assert trigger.event == GitHubEvent.PULL_REQUEST
+        assert trigger.types == ("synchronize", "reopened")
+        assert wf.has_pr_trigger is True
+        assert wf.has_schedule is False
+
+    def test_schedule_trigger(self) -> None:
+        config = {
+            "workflows": {
+                "cron": {
+                    "triggers": {"schedule": "0 8 * * 1"},
+                    "skills": ["a"],
+                }
+            }
+        }
+        wf = get_workflow(config, "cron")
+        assert wf is not None
+        assert wf.has_schedule is True
+        assert wf.has_pr_trigger is False
+        # Schedule auto-adds ManualTrigger
+        assert len(wf.triggers) == 2
+        schedule = next(t for t in wf.triggers if isinstance(t, ScheduleTrigger))
+        assert schedule.cron == "0 8 * * 1"
+        manual = next(t for t in wf.triggers if isinstance(t, ManualTrigger))
+        assert manual is not None
+
+    def test_schedule_with_explicit_workflow_dispatch(self) -> None:
+        config = {
+            "workflows": {
+                "cron": {
+                    "triggers": {
+                        "schedule": "0 8 * * 1",
+                        "workflow_dispatch": True,
+                    },
+                    "skills": ["a"],
+                }
+            }
+        }
+        wf = get_workflow(config, "cron")
+        assert wf is not None
+        # Should not duplicate ManualTrigger
+        manual_count = sum(1 for t in wf.triggers if isinstance(t, ManualTrigger))
+        assert manual_count == 1
+
+    def test_empty_triggers(self) -> None:
+        config = {"workflows": {"bare": {"triggers": {}, "skills": ["a"]}}}
+        wf = get_workflow(config, "bare")
+        assert wf is not None
+        assert wf.triggers == ()
+
+    def test_mixed_triggers(self) -> None:
+        config = {
+            "workflows": {
+                "mixed": {
+                    "triggers": {
+                        "pull_request": ["synchronize"],
+                        "schedule": "0 0 * * *",
+                    },
+                    "skills": ["a"],
+                }
+            }
+        }
+        wf = get_workflow(config, "mixed")
+        assert wf is not None
+        assert wf.has_pr_trigger is True
+        assert wf.has_schedule is True
+
+
+class TestReportMode:
+    def test_default_is_pr(self) -> None:
+        config = {"workflows": {"w": {"triggers": {}, "skills": ["a"]}}}
+        wf = get_workflow(config, "w")
+        assert wf is not None
+        assert wf.report_mode == "pr"
+
+    def test_issue_mode(self) -> None:
+        config = {
+            "workflows": {
+                "w": {"triggers": {}, "skills": ["a"], "report-mode": "issue"}
+            }
+        }
+        wf = get_workflow(config, "w")
+        assert wf is not None
+        assert wf.report_mode == "issue"
+
+    def test_invalid_mode_defaults_to_pr(self) -> None:
+        config = {
+            "workflows": {
+                "w": {"triggers": {}, "skills": ["a"], "report-mode": "slack"}
+            }
+        }
+        wf = get_workflow(config, "w")
+        assert wf is not None
+        assert wf.report_mode == "pr"

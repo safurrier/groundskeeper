@@ -3,11 +3,17 @@ name: {{ name }}
 "on":
 {{ triggers_yaml | indent(2, first=true) }}
 concurrency:
+{%- if is_pr_trigger %}
   group: gk-{{ skill_name }}-{% raw %}${{ github.event.pull_request.number }}{% endraw %}
+{%- else %}
+  group: gk-{{ skill_name }}
+{%- endif %}
   cancel-in-progress: true
 jobs:
   {{ skill_name }}:
+{%- if is_pr_trigger %}
     if: {% raw %}${{ !github.event.pull_request.draft }}{% endraw %}
+{%- endif %}
 {%- if depends_on %}
     needs: {{ depends_on }}
 {%- endif %}

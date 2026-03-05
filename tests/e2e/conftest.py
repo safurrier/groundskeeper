@@ -70,6 +70,19 @@ workflows:
       - greeting
 """
 
+SCHEDULE_CONFIG = """\
+version: 1
+runner: claude-code
+ci: github-actions
+workflows:
+  health-check:
+    triggers:
+      schedule: "0 8 * * 1"
+    report-mode: issue
+    skills:
+      - repo-summary
+"""
+
 
 @pytest.fixture
 def e2e_repo(tmp_path: Path) -> Path:
@@ -111,6 +124,42 @@ def e2e_repo(tmp_path: Path) -> Path:
     (tmp_path / ".groundskeeper" / "config.yml").write_text(CHAIN_CONFIG)
 
     # Initial commit (skip hooks — this is a test fixture, not user code)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, capture_output=True, check=True)
+    subprocess.run(
+        ["git", "commit", "--no-verify", "-m", "initial"],
+        cwd=tmp_path,
+        capture_output=True,
+        check=True,
+    )
+
+    return tmp_path
+
+
+@pytest.fixture
+def e2e_schedule_repo(tmp_path: Path) -> Path:
+    """Create a real git repo with a schedule-triggered workflow for e2e testing."""
+    subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@test.com"],
+        cwd=tmp_path,
+        capture_output=True,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test"],
+        cwd=tmp_path,
+        capture_output=True,
+        check=True,
+    )
+
+    (tmp_path / "README.md").write_text("# Test Project\n")
+
+    skill_dir = tmp_path / ".groundskeeper" / "skills" / "repo-summary"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(REPO_SUMMARY_SKILL)
+
+    (tmp_path / ".groundskeeper" / "config.yml").write_text(SCHEDULE_CONFIG)
+
     subprocess.run(["git", "add", "."], cwd=tmp_path, capture_output=True, check=True)
     subprocess.run(
         ["git", "commit", "--no-verify", "-m", "initial"],

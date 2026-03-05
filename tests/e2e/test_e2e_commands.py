@@ -148,6 +148,42 @@ class TestGkGenerateE2E:
 
 
 @requires_gk
+class TestGkGenerateScheduleE2E:
+    """Test `gk generate` with schedule triggers via real binary."""
+
+    def test_generate_schedule_workflow(self, e2e_schedule_repo: Path) -> None:
+        result = run_gk("generate", cwd=e2e_schedule_repo)
+        assert result.returncode == 0
+
+        wf_path = e2e_schedule_repo / ".github" / "workflows" / "gk_health-check.yml"
+        assert wf_path.exists()
+
+        parsed = yaml.safe_load(wf_path.read_text())
+
+        # Schedule trigger present with cron
+        assert parsed["on"]["schedule"] == [{"cron": "0 8 * * 1"}]
+        # workflow_dispatch auto-added
+        assert "workflow_dispatch" in parsed["on"]
+        # No PR-specific draft check
+        job = next(iter(parsed["jobs"].values()))
+        assert "if" not in job
+
+    def test_generate_schedule_no_pr_concurrency(self, e2e_schedule_repo: Path) -> None:
+        run_gk("generate", cwd=e2e_schedule_repo)
+        wf_path = e2e_schedule_repo / ".github" / "workflows" / "gk_health-check.yml"
+        content = wf_path.read_text()
+        # Should NOT reference pull_request.number in concurrency group
+        assert "pull_request.number" not in content
+
+    def test_run_workflow_dry_run_schedule(self, e2e_schedule_repo: Path) -> None:
+        result = run_gk(
+            "run-workflow", "health-check", "--dry-run", cwd=e2e_schedule_repo
+        )
+        assert result.returncode == 0
+        assert "Summarize this repository" in result.stdout
+
+
+@requires_gk
 class TestGkRunWorkflowE2E:
     """Test `gk run-workflow --dry-run` via real binary."""
 
