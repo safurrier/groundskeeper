@@ -9,6 +9,13 @@ from typing import Any
 import yaml
 
 from groundskeeper.domain.errors import ConfigError
+from groundskeeper.domain.triggers import (
+    EventTrigger,
+    GitHubEvent,
+    ManualTrigger,
+    ScheduleTrigger,
+    TriggerSpec,
+)
 
 # Tools that can modify the working directory.
 WRITE_TOOLS = frozenset({"Write", "Edit", "Bash", "NotebookEdit"})
@@ -42,9 +49,23 @@ class Workflow:
     """
 
     name: str
-    triggers: dict[str, list[str]]
+    triggers: tuple[TriggerSpec, ...]
     steps: list[Step]
     allowed_tools: list[str] = field(default_factory=list)
+    report_mode: str = "pr"
+
+    @property
+    def has_pr_trigger(self) -> bool:
+        """Check if any trigger is a pull_request event."""
+        return any(
+            isinstance(t, EventTrigger) and t.event == GitHubEvent.PULL_REQUEST
+            for t in self.triggers
+        )
+
+    @property
+    def has_schedule(self) -> bool:
+        """Check if any trigger is a cron schedule."""
+        return any(isinstance(t, ScheduleTrigger) for t in self.triggers)
 
     @property
     def all_skill_names(self) -> list[str]:
@@ -99,6 +120,25 @@ class Workflow:
             if set(tools) & WRITE_TOOLS:
                 return False
         return True
+
+
+def _parse_triggers(raw: dict[str, Any]) -> tuple[TriggerSpec, ...]:
+    """Parse raw trigger config into typed trigger specs."""
+    specs: list[TriggerSpec] = []
+    for key, value in raw.items():
+        if key == "schedule":
+            specs.append(ScheduleTrigger(cron=str(value)))
+        elif key == "workflow_dispatch":
+            specs.append(ManualTrigger())
+        else:
+            event = GitHubEvent(key)
+            types = tuple(str(t) for t in value) if isinstance(value, list) else ()
+            specs.append(EventTrigger(event=event, types=types))
+    # Auto-add ManualTrigger for scheduled workflows
+    if any(isinstance(s, ScheduleTrigger) for s in specs):
+        if not any(isinstance(s, ManualTrigger) for s in specs):
+            specs.append(ManualTrigger())
+    return tuple(specs)
 
 
 def _parse_skill_ref(entry: Any) -> SkillRef | None:
@@ -178,7 +218,11 @@ def get_workflows(config: dict[str, Any]) -> list[Workflow]:
     for name, wf_config in raw.items():
         if not isinstance(wf_config, dict):
             continue
-        triggers = wf_config.get("triggers", {})
+        raw_triggers = wf_config.get("triggers", {})
+        if not isinstance(raw_triggers, dict):
+            raw_triggers = {}
+        triggers = _parse_triggers(raw_triggers)
+
         raw_skills = wf_config.get("skills", [])
         if not isinstance(raw_skills, list) or not raw_skills:
             continue
@@ -186,6 +230,10 @@ def get_workflows(config: dict[str, Any]) -> list[Workflow]:
         wf_tools = wf_config.get("allowed-tools", [])
         if not isinstance(wf_tools, list):
             wf_tools = []
+
+        report_mode = wf_config.get("report-mode", "pr")
+        if report_mode not in ("pr", "issue"):
+            report_mode = "pr"
 
         steps = _parse_steps(raw_skills)
         if not steps:
@@ -197,6 +245,7 @@ def get_workflows(config: dict[str, Any]) -> list[Workflow]:
                 triggers=triggers,
                 steps=steps,
                 allowed_tools=[str(t) for t in wf_tools],
+                report_mode=str(report_mode),
             )
         )
     return workflows

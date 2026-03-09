@@ -31,14 +31,28 @@ The domain layer has zero external dependencies. All I/O goes through protocol i
 - **`RunContext`** — execution context: skill + arguments + working_directory + skip_permissions + allowed_tools_override
 - **`RunResult`** — output: success, output text, error text, exit_code, metadata
 
+## Trigger Types (`groundskeeper/domain/triggers.py`)
+
+Tagged union for workflow trigger configuration:
+
+- **`EventTrigger`** — GitHub webhook event (e.g., `pull_request`) with activity type filters. Uses `GitHubEvent` enum for event names, `tuple[str, ...]` for activity types.
+- **`ScheduleTrigger`** — Cron-based schedule (e.g., `"0 8 * * 1"` for Monday 8am UTC)
+- **`ManualTrigger`** — `workflow_dispatch` for GitHub Actions UI runs
+
+`TriggerSpec = EventTrigger | ScheduleTrigger | ManualTrigger`
+
+Schedule triggers auto-inject `ManualTrigger` during parsing so scheduled workflows can always be triggered manually.
+
 ## Workflow Models (`groundskeeper/domain/config.py`)
 
 - **`SkillRef`** — reference to a skill with optional per-step `allowed_tools`
 - **`ParallelGroup`** — group of `SkillRef`s that can run concurrently
 - **`Step`** = `SkillRef | ParallelGroup` — a workflow step
-- **`Workflow`** — named sequence of steps with triggers and optional workflow-level `allowed_tools`
+- **`Workflow`** — named sequence of steps with typed `triggers: tuple[TriggerSpec, ...]`, optional workflow-level `allowed_tools`, and `report_mode` (pr/issue)
 
-Key method: `Workflow.effective_tools(ref)` resolves tool precedence (per-step > workflow > skill frontmatter).
+Key methods:
+- `Workflow.effective_tools(ref)` resolves tool precedence (per-step > workflow > skill frontmatter)
+- `Workflow.has_pr_trigger` / `Workflow.has_schedule` — trigger type queries used by CI generation
 
 ## Execution Flow
 
@@ -58,6 +72,11 @@ For workflows: steps execute sequentially. `ParallelGroup` steps use `ThreadPool
 
 ```
 config.yml → load_config() → get_workflows()
+  → _parse_triggers() converts raw YAML into typed TriggerSpec tuple
+  → _triggers_to_actions_yaml() converts back to GHA on: syntax
+  → Templates receive is_pr_trigger flag for conditional rendering:
+      PR triggers: draft check + PR-number concurrency group
+      Schedule/manual: simple concurrency group, no draft check
   → Single-skill workflow: generate_caller() from caller.yml.j2
   → Multi-skill workflow: generate_chain_workflow() from chain.yml.j2
       Skills within a stage run in parallel (separate GHA jobs)

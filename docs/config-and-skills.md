@@ -2,10 +2,11 @@
 id: config-and-skills
 title: Config & Skills Deep Reference
 description: >
-  config.yml format, allowed-tools precedence, SKILL.md frontmatter spec,
+  config.yml format, trigger types, allowed-tools precedence, SKILL.md frontmatter spec,
   directory layout, $ARGUMENTS substitution, and skill resolution order.
 index:
   - id: groundskeeperconfigyml
+  - id: triggers
   - id: skillmd-format
   - id: skill-resolution-order
 ---
@@ -26,11 +27,48 @@ workflows:
     triggers:
       pull_request: [ready_for_review, synchronize]
     allowed-tools: [Read, Grep]     # optional: workflow-level default
+    report-mode: pr                 # optional: "pr" (default) or "issue"
     skills:
       - skill-name                  # simple string format
       - name: another-skill         # dict format with per-step tools
         allowed-tools: [Read, Write, Edit, Grep, Glob, Bash]
 ```
+
+### Triggers
+
+Triggers determine when a workflow runs. Three types are supported:
+
+```yaml
+# PR event trigger — runs on GitHub PR events
+triggers:
+  pull_request: [ready_for_review, synchronize, reopened]
+
+# Schedule trigger — cron syntax, auto-adds workflow_dispatch for manual runs
+triggers:
+  schedule: "0 8 * * 1"    # Monday 8am UTC
+
+# Manual trigger only
+triggers:
+  workflow_dispatch: true
+
+# Mixed — schedule + PR events
+triggers:
+  pull_request: [synchronize]
+  schedule: "0 15 * * 1"
+```
+
+Internally, triggers are parsed into typed dataclasses (`EventTrigger`, `ScheduleTrigger`, `ManualTrigger`) defined in `groundskeeper/domain/triggers.py`. Schedule workflows automatically get a `ManualTrigger` injected so they can also be triggered via the GitHub Actions UI.
+
+PR-triggered workflows get draft-PR checks (`if: !github.event.pull_request.draft`) and PR-specific concurrency groups. Scheduled/manual workflows skip both.
+
+### report-mode
+
+Controls how skills report results. Passed to the skill via workflow context.
+
+- `pr` (default): skill creates a branch and opens a PR
+- `issue`: skill creates a GitHub Issue
+
+Useful for scheduled health checks in repos where PR-based reporting would conflict with other automation (e.g., obsidian-git auto-sync).
 
 ### allowed-tools precedence (highest wins)
 

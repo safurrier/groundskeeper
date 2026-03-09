@@ -5,6 +5,22 @@ from __future__ import annotations
 import yaml
 
 from groundskeeper.adapters.github_actions import GitHubActionsProvider
+from groundskeeper.domain.triggers import (
+    EventTrigger,
+    GitHubEvent,
+    ManualTrigger,
+    ScheduleTrigger,
+)
+
+
+def _pr_triggers(*types: str) -> tuple[EventTrigger, ...]:
+    """Helper to create PR event triggers."""
+    return (EventTrigger(event=GitHubEvent.PULL_REQUEST, types=tuple(types)),)
+
+
+def _push_triggers(*types: str) -> tuple[EventTrigger, ...]:
+    """Helper to create push event triggers."""
+    return (EventTrigger(event=GitHubEvent.PUSH, types=tuple(types)),)
 
 
 def test_generate_reusable_workflow() -> None:
@@ -21,7 +37,7 @@ def test_generate_caller_with_triggers() -> None:
     provider = GitHubActionsProvider()
     yaml_str = provider.generate_caller(
         skill_name="codex-code-review",
-        triggers={"pull_request": ["ready_for_review", "synchronize"]},
+        triggers=_pr_triggers("ready_for_review", "synchronize"),
     )
     parsed = yaml.safe_load(yaml_str)
     assert parsed["on"]["pull_request"]["types"] == [
@@ -29,13 +45,15 @@ def test_generate_caller_with_triggers() -> None:
         "synchronize",
     ]
     assert "gk_agent.yml" in yaml_str
+    # PR triggers should have draft check
+    assert "draft" in yaml_str
 
 
 def test_generate_caller_with_depends_on() -> None:
     provider = GitHubActionsProvider()
     yaml_str = provider.generate_caller(
         skill_name="context-files",
-        triggers={"pull_request": ["ready_for_review"]},
+        triggers=_pr_triggers("ready_for_review"),
         depends_on=["codex-code-review"],
     )
     parsed = yaml.safe_load(yaml_str)
@@ -47,7 +65,7 @@ def test_generate_caller_without_depends_on() -> None:
     provider = GitHubActionsProvider()
     yaml_str = provider.generate_caller(
         skill_name="codex-code-review",
-        triggers={"pull_request": ["opened"]},
+        triggers=_pr_triggers("opened"),
     )
     parsed = yaml.safe_load(yaml_str)
     job = next(iter(parsed["jobs"].values()))
@@ -64,7 +82,7 @@ def test_generate_chain_workflow_two_skills_sequential() -> None:
     provider = GitHubActionsProvider()
     yaml_str = provider.generate_chain_workflow(
         workflow_name="review-chain",
-        triggers={"pull_request": ["ready_for_review"]},
+        triggers=_pr_triggers("ready_for_review"),
         stages=[["code-review"], ["context-files"]],
     )
     parsed = yaml.safe_load(yaml_str)
@@ -89,7 +107,7 @@ def test_generate_chain_workflow_three_skills_sequential() -> None:
     provider = GitHubActionsProvider()
     yaml_str = provider.generate_chain_workflow(
         workflow_name="full-review",
-        triggers={"pull_request": ["opened", "synchronize"]},
+        triggers=_pr_triggers("opened", "synchronize"),
         stages=[["lint"], ["code-review"], ["context-files"]],
     )
     parsed = yaml.safe_load(yaml_str)
@@ -109,7 +127,7 @@ def test_generate_chain_workflow_single_skill() -> None:
     provider = GitHubActionsProvider()
     yaml_str = provider.generate_chain_workflow(
         workflow_name="solo",
-        triggers={"pull_request": ["opened"]},
+        triggers=_pr_triggers("opened"),
         stages=[["code-review"]],
     )
     parsed = yaml.safe_load(yaml_str)
@@ -124,7 +142,7 @@ def test_generate_chain_workflow_parallel_stage() -> None:
     provider = GitHubActionsProvider()
     yaml_str = provider.generate_chain_workflow(
         workflow_name="parallel-check",
-        triggers={"pull_request": ["opened"]},
+        triggers=_pr_triggers("opened"),
         stages=[["lint", "type-check"], ["test"]],
     )
     parsed = yaml.safe_load(yaml_str)
@@ -142,7 +160,7 @@ def test_generate_chain_workflow_multi_parallel_stages() -> None:
     provider = GitHubActionsProvider()
     yaml_str = provider.generate_chain_workflow(
         workflow_name="full",
-        triggers={"pull_request": ["opened"]},
+        triggers=_pr_triggers("opened"),
         stages=[["lint", "types"], ["unit-test", "integration-test"], ["deploy"]],
     )
     parsed = yaml.safe_load(yaml_str)
@@ -167,7 +185,7 @@ def test_generate_chain_workflow_single_parallel_stage() -> None:
     provider = GitHubActionsProvider()
     yaml_str = provider.generate_chain_workflow(
         workflow_name="all-parallel",
-        triggers={"pull_request": ["opened"]},
+        triggers=_pr_triggers("opened"),
         stages=[["a", "b", "c"]],
     )
     parsed = yaml.safe_load(yaml_str)
@@ -179,7 +197,79 @@ def test_generated_yaml_is_valid() -> None:
     """All generated YAML should be parseable."""
     provider = GitHubActionsProvider()
     yaml.safe_load(provider.generate_reusable_workflow())
-    yaml.safe_load(provider.generate_caller("test", {"push": ["main"]}))
+    yaml.safe_load(provider.generate_caller("test", _push_triggers("main")))
     yaml.safe_load(
-        provider.generate_chain_workflow("chain", {"push": ["main"]}, [["a"], ["b"]])
+        provider.generate_chain_workflow(
+            "chain", _push_triggers("main"), [["a"], ["b"]]
+        )
     )
+
+
+# --- Schedule trigger tests ---
+
+
+def test_generate_caller_with_schedule_trigger() -> None:
+    """Schedule trigger generates cron syntax + workflow_dispatch, no draft check."""
+    provider = GitHubActionsProvider()
+    triggers = (ScheduleTrigger(cron="0 15 * * 1"), ManualTrigger())
+    yaml_str = provider.generate_caller(
+        skill_name="vault-health-check",
+        triggers=triggers,
+    )
+    parsed = yaml.safe_load(yaml_str)
+
+    # Schedule trigger present with cron
+    assert parsed["on"]["schedule"] == [{"cron": "0 15 * * 1"}]
+    # workflow_dispatch present
+    assert "workflow_dispatch" in parsed["on"]
+    # No draft check (not a PR trigger)
+    assert "draft" not in yaml_str
+    # No PR-specific concurrency group
+    assert "pull_request.number" not in yaml_str
+
+
+def test_generate_chain_with_schedule_trigger() -> None:
+    """Schedule trigger works for chain workflows too."""
+    provider = GitHubActionsProvider()
+    triggers = (ScheduleTrigger(cron="0 8 * * *"),)
+    yaml_str = provider.generate_chain_workflow(
+        workflow_name="daily-check",
+        triggers=triggers,
+        stages=[["lint"], ["test"]],
+    )
+    parsed = yaml.safe_load(yaml_str)
+
+    assert parsed["on"]["schedule"] == [{"cron": "0 8 * * *"}]
+    assert "draft" not in yaml_str
+
+
+def test_generate_caller_with_mixed_triggers() -> None:
+    """Schedule + PR triggers together."""
+    provider = GitHubActionsProvider()
+    triggers = (
+        EventTrigger(event=GitHubEvent.PULL_REQUEST, types=("synchronize",)),
+        ScheduleTrigger(cron="0 8 * * 1"),
+        ManualTrigger(),
+    )
+    yaml_str = provider.generate_caller(
+        skill_name="mixed-skill",
+        triggers=triggers,
+    )
+    parsed = yaml.safe_load(yaml_str)
+
+    assert "pull_request" in parsed["on"]
+    assert "schedule" in parsed["on"]
+    assert "workflow_dispatch" in parsed["on"]
+    # PR trigger present = draft check enabled
+    assert "draft" in yaml_str
+
+
+def test_generate_caller_non_pr_event_no_draft_check() -> None:
+    """Push triggers should not have draft check."""
+    provider = GitHubActionsProvider()
+    yaml_str = provider.generate_caller(
+        skill_name="deploy",
+        triggers=_push_triggers("main"),
+    )
+    assert "draft" not in yaml_str
+    assert "pull_request.number" not in yaml_str
