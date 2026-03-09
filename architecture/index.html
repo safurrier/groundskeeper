@@ -545,6 +545,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#trigger-types-groundskeeperdomaintriggerspy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Trigger Types (groundskeeper/domain/triggers.py)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#workflow-models-groundskeeperdomainconfigpy" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -630,14 +641,25 @@
 <li><strong><code>RunContext</code></strong> — execution context: skill + arguments + working_directory + skip_permissions + allowed_tools_override</li>
 <li><strong><code>RunResult</code></strong> — output: success, output text, error text, exit_code, metadata</li>
 </ul>
+<h2 id="trigger-types-groundskeeperdomaintriggerspy">Trigger Types (<code>groundskeeper/domain/triggers.py</code>)<a class="headerlink" href="#trigger-types-groundskeeperdomaintriggerspy" title="Permanent link">&para;</a></h2>
+<p>Tagged union for workflow trigger configuration:</p>
+<ul>
+<li><strong><code>EventTrigger</code></strong> — GitHub webhook event (e.g., <code>pull_request</code>) with activity type filters. Uses <code>GitHubEvent</code> enum for event names, <code>tuple[str, ...]</code> for activity types.</li>
+<li><strong><code>ScheduleTrigger</code></strong> — Cron-based schedule (e.g., <code>"0 8 * * 1"</code> for Monday 8am UTC)</li>
+<li><strong><code>ManualTrigger</code></strong> — <code>workflow_dispatch</code> for GitHub Actions UI runs</li>
+</ul>
+<p><code>TriggerSpec = EventTrigger | ScheduleTrigger | ManualTrigger</code></p>
+<p>Schedule triggers auto-inject <code>ManualTrigger</code> during parsing so scheduled workflows can always be triggered manually.</p>
 <h2 id="workflow-models-groundskeeperdomainconfigpy">Workflow Models (<code>groundskeeper/domain/config.py</code>)<a class="headerlink" href="#workflow-models-groundskeeperdomainconfigpy" title="Permanent link">&para;</a></h2>
 <ul>
 <li><strong><code>SkillRef</code></strong> — reference to a skill with optional per-step <code>allowed_tools</code></li>
 <li><strong><code>ParallelGroup</code></strong> — group of <code>SkillRef</code>s that can run concurrently</li>
 <li><strong><code>Step</code></strong> = <code>SkillRef | ParallelGroup</code> — a workflow step</li>
-<li><strong><code>Workflow</code></strong> — named sequence of steps with triggers and optional workflow-level <code>allowed_tools</code></li>
+<li><strong><code>Workflow</code></strong> — named sequence of steps with typed <code>triggers: tuple[TriggerSpec, ...]</code>, optional workflow-level <code>allowed_tools</code>, and <code>report_mode</code> (pr/issue)</li>
 </ul>
-<p>Key method: <code>Workflow.effective_tools(ref)</code> resolves tool precedence (per-step &gt; workflow &gt; skill frontmatter).</p>
+<p>Key methods:
+- <code>Workflow.effective_tools(ref)</code> resolves tool precedence (per-step &gt; workflow &gt; skill frontmatter)
+- <code>Workflow.has_pr_trigger</code> / <code>Workflow.has_schedule</code> — trigger type queries used by CI generation</p>
 <h2 id="execution-flow">Execution Flow<a class="headerlink" href="#execution-flow" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>CLI (main.py)
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>  → _get_stores() builds [LocalSkillStore, ..., BuiltinSkillStore]
@@ -650,10 +672,15 @@
 <p>For workflows: steps execute sequentially. <code>ParallelGroup</code> steps use <code>ThreadPoolExecutor</code> when all skills are read-only (no Write/Edit/Bash/NotebookEdit tools) or when <code>--parallel</code> is forced.</p>
 <h2 id="ci-generation-flow">CI Generation Flow<a class="headerlink" href="#ci-generation-flow" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>config.yml → load_config() → get_workflows()
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>  → Single-skill workflow: generate_caller() from caller.yml.j2
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>  → Multi-skill workflow: generate_chain_workflow() from chain.yml.j2
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>      Skills within a stage run in parallel (separate GHA jobs)
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>      Stages are sequential (each waits for the previous)
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>  → _parse_triggers() converts raw YAML into typed TriggerSpec tuple
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>  → _triggers_to_actions_yaml() converts back to GHA on: syntax
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>  → Templates receive is_pr_trigger flag for conditional rendering:
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>      PR triggers: draft check + PR-number concurrency group
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>      Schedule/manual: simple concurrency group, no draft check
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>  → Single-skill workflow: generate_caller() from caller.yml.j2
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>  → Multi-skill workflow: generate_chain_workflow() from chain.yml.j2
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>      Skills within a stage run in parallel (separate GHA jobs)
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>      Stages are sequential (each waits for the previous)
 </code></pre></div>
 <p>Templates live in <code>groundskeeper/builtins/templates/github_actions/</code>.</p>
 
