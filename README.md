@@ -1,63 +1,76 @@
 # Groundskeeper
 
-Define AI agent skills as markdown files. Chain them into workflows. Run them locally or in CI on every PR.
+Define AI agent skills as markdown prompt templates. Chain them into workflows. Run them locally or generate GitHub Actions workflows that run them on PRs or schedules.
 
 ## Why this exists
 
-You want an AI agent to review your PRs, update your docs, check for anti-patterns, or run a custom analysis. The agent needs a prompt, some tool permissions, and a trigger. Today you'd wire this up manually with GitHub Actions, `claude-code-action`, and a bunch of YAML boilerplate.
+You want an AI agent to review a PR, update docs, check for anti-patterns, or run a custom analysis. The agent needs a prompt, tool permissions, and a trigger. Without Groundskeeper, you wire that together by hand with GitHub Actions, `claude-code-action`, and YAML boilerplate.
 
-Groundskeeper wraps all of that. You write a skill (a markdown file with YAML frontmatter), declare when it should run, and `gk generate` produces the CI workflows. You can also run skills locally with `gk run` or chain multiple skills together with `gk run-workflow`.
+Groundskeeper keeps the authoring model small: a skill is a directory containing `SKILL.md` with YAML frontmatter and a markdown body. No SDK, no plugin API, no build step. If you can write a prompt template, you can write a skill.
 
-Skills are just prompt templates in directories. No SDK, no plugin API, no build step. If you can write a prompt, you can write a skill.
+## Install or run it
 
-## Installation
+### From a source checkout
 
-```bash
-uv tool install groundskeeper
-```
-
-This installs `gk` globally. Run `gk --help` to verify.
-
-### From source
+Use this path when you are developing Groundskeeper or when package-registry availability is uncertain.
 
 ```bash
 git clone https://github.com/safurrier/groundskeeper.git
 cd groundskeeper
-mise run setup    # Install dependencies
-mise run check    # Run lint, type check, tests
+uv run gk --help      # run the CLI from this checkout
 ```
 
-## Quick Start
+To install the checkout as a global `gk` command, run `uv tool install .` from the repo root. For development tasks, use `mise run setup` and `mise run check` after trusting the repo's `mise.toml` if your mise configuration requires it.
 
-**1. Initialize**
+### From a package registry
+
+```bash
+uv tool install groundskeeper
+gk --help
+```
+
+Registry installation was not verified for this README update. Use the source-checkout path above if `uv` cannot find a published `groundskeeper` package in your configured Python package index.
+
+## Quick start: local skill first, CI second
+
+### 1. Initialize project config
 
 ```bash
 gk init
 ```
 
-Creates `.groundskeeper/config.yml` and a `skills/` directory. Ships with two builtin skills (`codex-code-review` and `context-files`).
+`gk init` creates local Groundskeeper state only:
 
-**2. List available skills**
+- `.groundskeeper/config.yml`
+- `.groundskeeper/skills/`
+
+It does **not** create GitHub Actions files. Run `gk generate` later after you validate skills and opt into a CI provider.
+
+### 2. See available skills
 
 ```bash
 gk list
 ```
 
-Shows builtins, local skills (`.groundskeeper/skills/`), and any external skill paths.
+You should see builtin skills such as `codex-code-review` and `context-files`, plus any local or external skill paths.
 
-**3. Run a skill locally**
+### 3. Preview a skill prompt locally
 
 ```bash
-gk run codex-code-review --dry-run          # Preview the prompt
-gk run codex-code-review --yolo             # Run with full tool access
-gk run codex-code-review --args "strict"    # Pass arguments
+gk run codex-code-review --dry-run
 ```
 
-**4. Run a workflow (chain of skills)**
+`--dry-run` renders the prompt without calling Claude Code. To execute for real, install the Claude Code CLI and run without `--dry-run`; `--yolo` passes `--dangerously-skip-permissions` to Claude Code.
 
-Define a workflow in `.groundskeeper/config.yml`:
+### 4. Write or edit a workflow
+
+Workflows live in `.groundskeeper/config.yml` and chain skills in order:
 
 ```yaml
+version: 1
+runner: claude-code
+ci: github-actions
+
 workflows:
   pr-check:
     triggers:
@@ -69,31 +82,32 @@ workflows:
         allowed-tools: [Read, Grep, Glob]
 ```
 
-Run it:
+Tool permissions cascade: per-step `allowed-tools` > workflow-level `allowed-tools` > skill frontmatter.
+
+### 5. Validate before generating CI
 
 ```bash
-gk run-workflow pr-check --dry-run     # Preview
-gk run-workflow pr-check --yolo        # Run for real
+gk check
 ```
 
-**5. Generate CI workflows**
+This re-parses all visible `SKILL.md` files and catches invalid frontmatter or skill structure before you create workflow YAML.
+
+### 6. Generate GitHub Actions workflows
 
 ```bash
 gk generate
 ```
 
-Produces `.github/workflows/gk_*.yml` files that run your skills on PR events via `claude-code-action`.
+`gk generate` reads `.groundskeeper/config.yml` and writes `.github/workflows/gk_*.yml`. It requires `ci: github-actions` in the config. Generated workflows use `ANTHROPIC_API_KEY` from repository secrets and call `anthropics/claude-code-action@v1`.
 
-## Skills
+## Skills are prompt templates
 
 A skill is a directory with a `SKILL.md` file:
 
+```text
+.groundskeeper/skills/my-skill/
+└── SKILL.md
 ```
-my-skill/
-  SKILL.md
-```
-
-The file has YAML frontmatter and a markdown body (the prompt):
 
 ```markdown
 ---
@@ -109,83 +123,79 @@ You are an agent. Do the useful thing.
 Use $ARGUMENTS to adjust behavior.
 ```
 
-That's it. Put the directory in `.groundskeeper/skills/` and `gk list` picks it up.
+Put the directory under `.groundskeeper/skills/` and `gk list` picks it up. Skill names must be kebab-case.
 
-## External skills
+### External skill libraries
 
-Load skills from anywhere with `--skill-path`:
+Load skills from another directory with `--skill-path`:
 
 ```bash
 gk --skill-path ~/my-skills list
 gk --skill-path ~/my-skills run my-skill --dry-run
 ```
 
-Useful for sharing skills across repos or using a personal skill library.
+Resolution order is local, then external paths, then builtin skills. First match wins, so a local skill can shadow a shared or builtin skill.
 
-## Workflows
+## Workflows and parallel groups
 
-Workflows chain skills sequentially. Define them in `.groundskeeper/config.yml`:
+Workflows run steps sequentially. A nested list marks a parallel stage:
 
 ```yaml
 workflows:
   full-check:
     triggers:
       pull_request: [ready_for_review]
-    allowed-tools: [Read, Grep, Glob]    # default for all steps
+    allowed-tools: [Read, Grep, Glob]
     skills:
+      - [lint-check, type-check]
       - name: docs-updater
-        allowed-tools: [Read, Write, Edit, Grep, Glob, Bash]  # override
-      - code-reviewer                     # inherits workflow-level tools
+        allowed-tools: [Read, Write, Edit, Grep, Glob, Bash]
 ```
 
-Tool permissions cascade: per-step > workflow-level > skill frontmatter.
+In CI, skills in the same stage run in parallel. Locally, parallel groups auto-parallelize only when all skills are read-only; pass `--parallel` to force concurrency.
 
-### Parallel groups
-
-Skills in a nested list run concurrently (in CI always, locally when safe):
-
-```yaml
-skills:
-  - [lint-check, type-check]    # these two run in parallel
-  - test-runner                  # this waits for both to finish
-```
-
-Locally, parallel groups auto-run concurrently only when all skills are read-only (no Write/Edit/Bash). Use `--parallel` to force it.
-
-## Commands
+## Command reference
 
 | Command | What it does |
-|---------|-------------|
-| `gk init` | Create `.groundskeeper/` config and CI workflows |
-| `gk list` | Show available skills |
-| `gk run <skill>` | Run a single skill locally |
-| `gk run-workflow <name>` | Run a workflow chain |
-| `gk check [skill]` | Validate skill definitions |
-| `gk show <skill>` | Display skill metadata and prompt |
-| `gk render <skill>` | Output rendered prompt (used by CI) |
-| `gk generate` | Regenerate CI workflow files |
+|---|---|
+| `gk init [--non-interactive]` | Create `.groundskeeper/config.yml` and `.groundskeeper/skills/`; does not generate CI files. |
+| `gk list` | Show local, external, and builtin skills with source labels. |
+| `gk show <skill>` | Display skill metadata and prompt body. |
+| `gk check [skill]` | Validate one skill or all visible skills. |
+| `gk render <skill> [--args "..."]` | Print the rendered prompt; generated CI uses this. |
+| `gk run <skill> [--dry-run] [--yolo] [--args "..."]` | Run or preview one skill locally. |
+| `gk run-workflow <name> [--dry-run] [--yolo] [--parallel] [--args "..."]` | Run a configured workflow locally. |
+| `gk generate` | Write `.github/workflows/gk_*.yml` from config; requires `ci: github-actions`. |
 
-Common flags: `--dry-run` (preview), `--yolo` (skip permission checks), `--args "..."` (pass arguments), `--skill-path <dir>` (external skills).
+Global flag: `--skill-path <dir>` adds an external skill directory.
 
-## How it works in CI
+## How generated CI works
 
-`gk generate` produces GitHub Actions workflows that:
+Generated workflows:
 
-1. Check out the repo
-2. Install groundskeeper
-3. Render the skill prompt (`gk render <skill>`)
-4. Pass it to `anthropics/claude-code-action@v1`
+1. Check out the repository.
+2. Install `uv`.
+3. Install `groundskeeper` in the runner (`uv tool install groundskeeper`, so generated CI assumes the package is available from the configured registry).
+4. Render the selected skill prompt with `gk render`.
+5. Pass the prompt to `anthropics/claude-code-action@v1`.
 
-Multi-skill workflows generate a single workflow file with chained jobs. You just need `ANTHROPIC_API_KEY` in your repo secrets.
+Multi-skill workflows become one GitHub Actions file with staged jobs: skills in the same stage run in parallel, and later stages wait for earlier stages.
 
 ## Development
 
 ```bash
-mise run setup       # Install dependencies
-mise run check       # Lint + format + typecheck + tests
-mise run test        # Unit tests only
-mise run test:e2e    # E2E tests (requires: mise run install)
+mise run setup       # Install dependencies with uv
+mise run check       # Lint + format check + type check + tests
+mise run test        # Unit tests only (excludes e2e by default)
+mise run test:e2e    # E2E tests; requires mise run install first
 ```
+
+## More docs
+
+- [Getting started](docs/getting-started.md)
+- [Config and skills deep reference](docs/config-and-skills.md)
+- [CLI reference](docs/reference/cli.md)
+- [Architecture](docs/architecture.md)
 
 ## License
 
