@@ -150,11 +150,19 @@ def _automation_summary(item: Automation) -> dict[str, object]:
     return {
         "name": item.name,
         "repository": item.source.repository,
+        "repository_path": str(item.source.repository_path),
+        "labels": {
+            "ready": item.source.ready_label,
+            "running": item.source.running_label,
+            "review": item.source.review_label,
+            "blocked": item.source.blocked_label,
+        },
         "runner": {
             "type": item.runner.type,
             "skill": item.runner.skill,
             "approval": item.runner.approval,
             "session": item.runner.session,
+            "timeout_seconds": item.runner.timeout_seconds,
         },
         "policy": {
             "concurrency": item.policy.concurrency,
@@ -233,12 +241,22 @@ def _build_automation_runner(
     return PiAutomationRunner(
         client,
         repository_path,
-        AutomationSkillRenderer(skill),
+        AutomationSkillRenderer(skill, definition.policy),
         definition.runner,
     )
 
 
-@automation.command("list")
+@automation.command(
+    "list",
+    epilog="""
+\b
+Examples:
+  gk automation list --json
+  gk automation --config /srv/widgets/.groundskeeper/config.yml list --json
+
+Exit codes: 0 listed successfully, 2 invalid configuration.
+""",
+)
 @click.option("--json", "json_output", is_flag=True, help="Emit versioned JSON output.")
 @click.pass_context
 def automation_list(ctx: click.Context, json_output: bool) -> None:
@@ -259,7 +277,17 @@ def automation_list(ctx: click.Context, json_output: bool) -> None:
         click.echo(f"  {item.name:<24} {item.source.repository} [{item.runner.skill}]")
 
 
-@automation.command("show")
+@automation.command(
+    "show",
+    epilog="""
+\b
+Examples:
+  gk automation show daily-dev --json
+  gk automation --config /srv/widgets/.groundskeeper/config.yml show daily-dev
+
+Exit codes: 0 found, 2 invalid configuration or unknown automation.
+""",
+)
 @click.argument("name")
 @click.option("--json", "json_output", is_flag=True, help="Emit versioned JSON output.")
 @click.pass_context
@@ -277,7 +305,17 @@ def automation_show(ctx: click.Context, name: str, json_output: bool) -> None:
     click.echo(json.dumps(summary, indent=2))
 
 
-@automation.command("validate")
+@automation.command(
+    "validate",
+    epilog="""
+\b
+Examples:
+  gk automation validate daily-dev --json
+  gk automation --config /srv/widgets/.groundskeeper/config.yml validate
+
+Exit codes: 0 valid, 2 invalid configuration, unresolved skill, missing Pi, or missing repository.
+""",
+)
 @click.argument("name", required=False)
 @click.option("--json", "json_output", is_flag=True, help="Emit versioned JSON output.")
 @click.pass_context

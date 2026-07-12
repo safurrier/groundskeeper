@@ -25,6 +25,7 @@ class FakeTracker:
         self.tasks = [TASK]
         self.transitions: list[tuple[TaskState, str]] = []
         self.pr: str | None = None
+        self.policy_violation: str | None = None
 
     def list_ready(self) -> list[AutomationTask]:
         return self.tasks
@@ -42,6 +43,13 @@ class FakeTracker:
 
     def find_pull_request(self, task: AutomationTask) -> str | None:
         return self.pr
+
+    def find_policy_violation(self, task: AutomationTask) -> str | None:
+        return self.policy_violation
+
+
+def _raise_github_timeout(task: AutomationTask) -> str | None:
+    raise RuntimeError("command timed out after 30 seconds: gh")
 
 
 class FakeRunner:
@@ -82,7 +90,43 @@ def test_worker_output_pr_must_match_tracker_closing_reference() -> None:
     ).tick(AUTOMATION)
     assert result.status == "blocked"
     assert tracker.transitions == [
-        (TaskState.BLOCKED, "Worker completed without an open pull request")
+        (TaskState.BLOCKED, "Worker completed without an open draft pull request")
+    ]
+
+
+def test_noncompliant_closing_pr_is_blocked_as_policy_violation() -> None:
+    tracker = FakeTracker()
+    tracker.policy_violation = "Closing pull request is not a draft"
+    result = AutomationService(tracker, FakeRunner(WorkResult(True))).tick(AUTOMATION)
+    assert result.status == "blocked"
+    assert tracker.transitions == [
+        (TaskState.BLOCKED, "Closing pull request is not a draft")
+    ]
+
+
+def test_post_worker_github_timeout_blocks_claimed_task() -> None:
+    tracker = FakeTracker()
+    tracker.find_pull_request = _raise_github_timeout  # type: ignore[method-assign]
+    result = AutomationService(tracker, FakeRunner(WorkResult(True))).tick(AUTOMATION)
+    assert result.status == "blocked"
+    assert tracker.transitions == [
+        (TaskState.BLOCKED, "command timed out after 30 seconds: gh")
+    ]
+
+
+def test_timed_out_worker_is_blocked_with_actionable_detail() -> None:
+    tracker = FakeTracker()
+    result = AutomationService(
+        tracker,
+        FakeRunner(
+            WorkResult(
+                False, error="command timed out after 7200 seconds: pi", exit_code=124
+            )
+        ),
+    ).tick(AUTOMATION)
+    assert result.status == "blocked"
+    assert tracker.transitions == [
+        (TaskState.BLOCKED, "command timed out after 7200 seconds: pi")
     ]
 
 

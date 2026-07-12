@@ -49,7 +49,7 @@ def _factory_repo(tmp_path: Path, gh_output: str) -> tuple[Path, dict[str, str]]
 
 
 def _factory_flow_repo(
-    tmp_path: Path, state: str, pi_success: bool = True
+    tmp_path: Path, state: str, pi_success: bool = True, draft: bool = True
 ) -> tuple[Path, dict[str, str]]:
     repo, env = _factory_repo(tmp_path, "[]")
     binary_dir = tmp_path / "bin"
@@ -59,6 +59,7 @@ def _factory_flow_repo(
         '"url":"https://github.com/me/repo/issues/7",'
         '"author":{"login":"alex"},"labels":[{"name":"factory:' + state + '"}]}]'
     )
+    draft_json = "true" if draft else "false"
     (binary_dir / "gh").write_text(
         "#!/bin/sh\n"
         'case "$*" in\n'
@@ -66,7 +67,7 @@ def _factory_flow_repo(
         "  *\"issue list\"*) printf '%s' '[]' ;;\n"
         f"  *\"pr list\"*) if [ -f '{pr_created}' ]; then "
         'printf \'%s\' \'[{"url":"https://github.com/me/repo/pull/9",'
-        '"isDraft":true,"closingIssuesReferences":[{"number":7}]}]\'; '
+        f'"isDraft":{draft_json},"closingIssuesReferences":[{{"number":7}}]}}]\'; '
         "else printf '%s' '[]'; fi ;;\n"
         "  *) printf '%s' '' ;;\n"
         "esac\n"
@@ -179,6 +180,14 @@ class TestAutomationE2E:
         assert (
             payload["data"]["pull_request_url"] == "https://github.com/me/repo/pull/9"
         )
+
+    def test_non_draft_closing_pr_is_blocked_as_policy_violation(
+        self, tmp_path: Path
+    ) -> None:
+        repo, env = _factory_flow_repo(tmp_path, "ready", draft=False)
+        result = run_gk("automation", "tick", "daily", "--json", cwd=repo, env=env)
+        assert result.returncode == 5
+        assert "not a draft" in json.loads(result.stdout)["data"]["detail"]
 
     def test_worker_failure_is_blocked(self, tmp_path: Path) -> None:
         repo, env = _factory_flow_repo(tmp_path, "ready", pi_success=False)

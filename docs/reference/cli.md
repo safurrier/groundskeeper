@@ -28,12 +28,19 @@ gk automation validate [NAME] [--json]
 gk automation tick NAME [--dry-run] [--json]
 ```
 
-`list` and `show` inspect configured local automations. `validate` checks strict
-config, named-skill resolution, Pi availability, the repository path, and the
-fixed draft-only/never-merge policy without contacting GitHub or starting work.
-`tick` runs one bounded reconciliation pass. Dry-run selects and reports eligible
-work without labels, comments, or worker launch. Its compact output omits issue
-bodies.
+`list` and `show` inspect configured local automations. `show --json` includes
+the resolved repository path, lifecycle labels, runner settings, and policy.
+`validate` checks strict config, named-skill resolution, Pi availability, the
+repository path, and the fixed draft-only/never-merge policy without contacting
+GitHub or starting work. `tick` runs one bounded reconciliation pass. Dry-run
+selects and reports eligible work without labels, comments, or worker launch.
+Its compact output omits issue bodies.
+
+Pi runner configuration accepts optional `timeout-seconds` (default: 7,200) for
+long-running tasks. GitHub CLI calls use a fixed 30-second timeout. Groundskeeper
+does not sandbox a user-authorized Pi process; it enforces its accepted-result
+postcondition by transitioning to review only for an open draft pull request
+with the exact closing reference.
 
 All JSON responses use a versioned envelope:
 `{"version":1,"status":"...","data":{...},"exit_code":N}`. Exit `0` means

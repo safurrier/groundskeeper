@@ -84,3 +84,8 @@ class GitHubIssuesTracker:
         return self._client.linked_pull_request(
             self._source.repository, int(task.external_id)
         )
+
+    def find_policy_violation(self, task: AutomationTask) -> str | None:
+        return self._client.closing_pr_policy_violation(
+            self._source.repository, int(task.external_id)
+        )

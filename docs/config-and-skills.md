@@ -23,10 +23,19 @@ The initial provider pair is `source.type: github-issues` and `runner.type: pi`.
 A Pi runner must explicitly name `skill`, use `approval: allow`, and use
 `session: deterministic`. Each source requires `repository`, `repository-path`,
 and at least one `trusted-author`. Safety policy is strict: concurrency is `1`,
-output is `draft-pr`, and merge is `never`. The policy is validated outside the
-skill prompt. An automation skill receives normalized `TASK_ID`, `TASK_TITLE`,
-`TASK_BODY`, `TASK_URL`, `REPOSITORY`, and `RECOVERY_CONTEXT`; ordinary skill
-rendering is unchanged. See the README for a complete configuration.
+output is `draft-pr`, and merge is `never`. Groundskeeper validates this policy
+and enforces the accepted-result postcondition: only an open draft pull request
+with the exact closing reference reaches review. It does not sandbox a
+user-authorized Pi process. An automation skill receives normalized `TASK_ID`,
+`TASK_TITLE`, `TASK_BODY`, `TASK_URL`, `REPOSITORY`, `RECOVERY_CONTEXT`, and
+`POLICY_CONCURRENCY`, `POLICY_OUTPUT`, and `POLICY_MERGE`; ordinary skill
+rendering is unchanged.
+
+Pi runners accept optional positive `timeout-seconds` (default: `7200`) for
+long-running development work. GitHub CLI operations use a fixed 30-second
+timeout. A Pi timeout becomes a blocked task with its actionable command error;
+the host lock is released when the tick exits. See the README for a complete
+configuration.
 
 ## .groundskeeper/config.yml
 

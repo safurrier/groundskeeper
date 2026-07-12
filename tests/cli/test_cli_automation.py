@@ -68,9 +68,22 @@ def test_automation_show_and_validate_use_versioned_envelopes(
         show = runner.invoke(cli, ["automation", "show", "daily-dev", "--json"])
         validate = runner.invoke(cli, ["automation", "validate", "daily-dev", "--json"])
     assert show.exit_code == 0
-    assert json.loads(show.output)["data"]["automation"]["name"] == "daily-dev"
+    shown = json.loads(show.output)["data"]["automation"]
+    assert shown["name"] == "daily-dev"
+    assert shown["repository_path"] == str(Path("/tmp").resolve())
+    assert shown["labels"]["review"] == "factory:review"
+    assert shown["runner"]["timeout_seconds"] == 7200
     assert validate.exit_code == 0
     assert json.loads(validate.output)["version"] == 1
+
+
+def test_automation_leaf_help_has_configured_examples() -> None:
+    runner = CliRunner()
+    for command in ("list", "show", "validate"):
+        result = runner.invoke(cli, ["automation", command, "--help"])
+        assert result.exit_code == 0
+        assert "gk automation --config" in result.output
+        assert "Exit codes:" in result.output
 
 
 def test_validate_rejects_missing_skill_before_tick(tmp_path: Path) -> None:

@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from groundskeeper.adapters.gh import GhClient, GhError
+from groundskeeper.adapters.gh import GH_QUERY_TIMEOUT_SECONDS, GhClient, GhError
 from groundskeeper.adapters.process import CommandResult
 
 
@@ -10,9 +10,13 @@ class FakeProcess:
     def __init__(self, stdout: str) -> None:
         self.stdout = stdout
         self.argv: tuple[str, ...] = ()
+        self.timeout: int | None = None
 
-    def run(self, argv: tuple[str, ...], cwd: Path) -> CommandResult:
+    def run(
+        self, argv: tuple[str, ...], cwd: Path, timeout: int | None = None
+    ) -> CommandResult:
         self.argv = argv
+        self.timeout = timeout
         return CommandResult(argv, cwd, 0, self.stdout, "")
 
 
@@ -26,6 +30,7 @@ def test_issue_discovery_is_server_filtered_and_bounded() -> None:
     GhClient(process, Path(".")).list_issues("me/repo", ("factory:ready",))
     assert process.argv[process.argv.index("--label") + 1] == "factory:ready"
     assert process.argv[process.argv.index("--limit") + 1] == "1000"
+    assert process.timeout == GH_QUERY_TIMEOUT_SECONDS
 
 
 def test_linked_pr_matches_exact_closing_issue_reference() -> None:
@@ -55,6 +60,19 @@ def test_linked_pr_finds_exact_reference_after_first_hundred() -> None:
         GhClient(process, Path(".")).linked_pull_request("me/repo", 12)
         == "https://pr/exact"
     )
+
+
+def test_closing_non_draft_or_merged_pr_is_a_policy_violation() -> None:
+    process = FakeProcess(
+        '[{"url":"https://pr/ready","isDraft":false,"state":"OPEN",'
+        '"closingIssuesReferences":[{"number":12}]},'
+        '{"url":"https://pr/merged","isDraft":false,"state":"MERGED",'
+        '"closingIssuesReferences":[{"number":12}]}]'
+    )
+    violation = GhClient(process, Path(".")).closing_pr_policy_violation("me/repo", 12)
+    assert violation == "Closing pull request is not a draft: https://pr/ready"
+    assert "--state" in process.argv
+    assert process.argv[process.argv.index("--state") + 1] == "all"
 
 
 def test_linked_pr_ignores_non_draft_closing_reference() -> None:

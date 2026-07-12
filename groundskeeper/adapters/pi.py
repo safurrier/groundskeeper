@@ -10,6 +10,7 @@ from typing import Literal
 
 from groundskeeper.adapters.process import ProcessClient
 from groundskeeper.domain.automation import WorkResult
+from groundskeeper.domain.config import DEFAULT_PI_TIMEOUT_SECONDS
 
 
 @dataclass(frozen=True)
@@ -19,6 +20,7 @@ class PiExecutionSettings:
     session_id: str
     name: str
     approval: Literal["allow"] = "allow"
+    timeout_seconds: int = DEFAULT_PI_TIMEOUT_SECONDS
 
 
 class PiClient:
@@ -47,6 +49,7 @@ class PiClient:
                 prompt,
             ),
             cwd,
+            timeout=settings.timeout_seconds,
         )
         match = re.search(r"https://github\.com/[^\s]+/pull/\d+", result.stdout)
         return WorkResult(

@@ -37,6 +37,31 @@ def test_parses_github_pi_automation() -> None:
     assert items[0].runner.skill == "issue-implementation"
     assert items[0].runner.approval == "allow"
     assert items[0].runner.session == "deterministic"
+    assert items[0].runner.timeout_seconds == 7200
+
+
+def test_rejects_non_positive_pi_timeout() -> None:
+    config = {
+        "automations": {
+            "daily": {
+                "source": {
+                    "type": "github-issues",
+                    "repository": "me/dots",
+                    "repository-path": "/tmp/dots",
+                    "trusted-authors": ["me"],
+                },
+                "runner": {
+                    "type": "pi",
+                    "skill": "issue-implementation",
+                    "approval": "allow",
+                    "session": "deterministic",
+                    "timeout-seconds": 0,
+                },
+            }
+        }
+    }
+    with pytest.raises(ConfigError, match=r"runner\.timeout-seconds"):
+        get_automations(config)
 
 
 @pytest.mark.parametrize(

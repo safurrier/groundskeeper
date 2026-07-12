@@ -7,7 +7,7 @@ from groundskeeper.adapters.automation_runner import (
 from groundskeeper.adapters.pi import PiClient, PiExecutionSettings
 from groundskeeper.adapters.process import CommandResult
 from groundskeeper.domain.automation import AutomationTask, WorkResult
-from groundskeeper.domain.config import PiRunnerConfig
+from groundskeeper.domain.config import AutomationPolicy, PiRunnerConfig
 from groundskeeper.domain.models import Skill, SkillSource
 
 
@@ -37,7 +37,7 @@ def _runner(client: FakePiClient) -> PiAutomationRunner:
     return PiAutomationRunner(
         client,
         Path("/repos/dots"),
-        AutomationSkillRenderer(_skill()),
+        AutomationSkillRenderer(_skill(), AutomationPolicy()),
         PiRunnerConfig(skill="issue-implementation"),
     )
 
@@ -61,6 +61,9 @@ def test_pi_runner_renders_normalized_task_context_with_typed_settings() -> None
     assert client.settings.session_id
     assert client.settings.name == "gk-me-dots-3"
     assert client.settings.approval == "allow"
+    assert client.settings.timeout_seconds == 7200
+    assert "POLICY_OUTPUT: draft-pr" in client.prompt
+    assert "POLICY_MERGE: never" in client.prompt
 
 
 def test_recovery_reuses_deterministic_session_and_changes_only_context() -> None:
@@ -80,9 +83,12 @@ def test_recovery_reuses_deterministic_session_and_changes_only_context() -> Non
 class FakeProcess:
     def __init__(self) -> None:
         self.argv: tuple[str, ...] = ()
+        self.timeout: int | None = None
 
-    def run(self, argv: tuple[str, ...], cwd: Path) -> CommandResult:
-        self.argv = argv
+    def run(
+        self, argv: tuple[str, ...], cwd: Path, timeout: int | None = None
+    ) -> CommandResult:
+        self.argv, self.timeout = argv, timeout
         return CommandResult(argv, cwd, 0, "https://github.com/me/repo/pull/8", "")
 
 
@@ -101,3 +107,4 @@ def test_pi_client_receives_only_rendered_prompt_and_typed_settings() -> None:
         "rendered task",
     )
     assert result.pull_request_url == "https://github.com/me/repo/pull/8"
+    assert process.timeout == 7200

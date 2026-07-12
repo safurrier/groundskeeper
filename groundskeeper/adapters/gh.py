@@ -9,6 +9,9 @@ from typing import cast
 
 from groundskeeper.adapters.process import ProcessClient
 
+GH_QUERY_TIMEOUT_SECONDS = 30
+GH_MUTATION_TIMEOUT_SECONDS = 30
+
 
 class GhError(RuntimeError):
     """A GitHub CLI operation failed."""
@@ -47,7 +50,7 @@ class GhClient:
             "--json",
             "number,title,body,url,author,labels",
         )
-        result = self._process.run(argv, self._cwd)
+        result = self._process.run(argv, self._cwd, timeout=GH_QUERY_TIMEOUT_SECONDS)
         if not result.success:
             raise GhError(result.stderr.strip() or "failed to list GitHub issues")
         raw = self._parse_json(result.stdout, "issue list")
@@ -111,6 +114,7 @@ class GhClient:
                 new,
             ),
             self._cwd,
+            timeout=GH_MUTATION_TIMEOUT_SECONDS,
         )
         if not result.success:
             raise GhError(result.stderr.strip() or "failed to update issue labels")
@@ -128,6 +132,7 @@ class GhClient:
                 body,
             ),
             self._cwd,
+            timeout=GH_MUTATION_TIMEOUT_SECONDS,
         )
         if not result.success:
             raise GhError(result.stderr.strip() or "failed to comment on issue")
@@ -148,6 +153,7 @@ class GhClient:
                 "1000",
             ),
             self._cwd,
+            timeout=GH_QUERY_TIMEOUT_SECONDS,
         )
         if not result.success:
             raise GhError(result.stderr.strip() or "failed to query pull requests")
@@ -179,6 +185,67 @@ class GhClient:
             return None
         except (KeyError, TypeError, ValueError) as error:
             raise GhError("gh pr list returned incomplete pull request data") from error
+
+    def closing_pr_policy_violation(self, repository: str, issue: int) -> str | None:
+        """Report a closing PR that fails the accepted draft-result postcondition."""
+        result = self._process.run(
+            (
+                "gh",
+                "pr",
+                "list",
+                "--repo",
+                repository,
+                "--state",
+                "all",
+                "--json",
+                "url,isDraft,state,closingIssuesReferences",
+                "--limit",
+                "1000",
+            ),
+            self._cwd,
+            timeout=GH_QUERY_TIMEOUT_SECONDS,
+        )
+        if not result.success:
+            raise GhError(
+                result.stderr.strip() or "failed to query pull request policy"
+            )
+        values = self._parse_json(result.stdout, "pull request policy query")
+        if not isinstance(values, list):
+            raise GhError("gh pr list returned an unexpected JSON shape")
+        try:
+            for pull_request in cast(list[object], values):
+                if not isinstance(pull_request, dict):
+                    raise TypeError
+                pr_data = cast(dict[str, object], pull_request)
+                if not self._closes_issue(pr_data, issue):
+                    continue
+                url = pr_data.get("url")
+                if not isinstance(url, str):
+                    raise TypeError
+                if pr_data.get("isDraft") is not True:
+                    return f"Closing pull request is not a draft: {url}"
+                state = pr_data.get("state")
+                if state != "OPEN":
+                    return f"Closing pull request is not open: {url}"
+            return None
+        except (TypeError, ValueError) as error:
+            raise GhError("gh pr list returned incomplete pull request data") from error
+
+    @staticmethod
+    def _closes_issue(pr_data: dict[str, object], issue: int) -> bool:
+        """Return whether a pull request has the exact closing reference."""
+        references = pr_data.get("closingIssuesReferences")
+        if not isinstance(references, list):
+            raise TypeError
+        for reference in cast(list[object], references):
+            if not isinstance(reference, dict):
+                raise TypeError
+            number = cast(dict[str, object], reference).get("number")
+            if not isinstance(number, (int, str)):
+                raise TypeError
+            if int(number) == issue:
+                return True
+        return False
 
     @staticmethod
     def _parse_json(value: str, operation: str) -> object:

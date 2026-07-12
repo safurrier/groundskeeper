@@ -21,7 +21,10 @@ class AutomationService:
         running = self._tracker.list_running()
         if running:
             task = running[0]
-            existing_pr = self._tracker.find_pull_request(task)
+            try:
+                existing_pr = self._tracker.find_pull_request(task)
+            except RuntimeError as error:
+                return self._block(automation.name, task, str(error))
             if existing_pr:
                 if not dry_run:
                     self._tracker.transition(task, TaskState.REVIEW, existing_pr)
@@ -40,7 +43,10 @@ class AutomationService:
         claim = self._tracker.claim(task)
         if not claim.claimed:
             return TickResult(automation.name, "not-claimed", task, detail=claim.reason)
-        existing_pr = self._tracker.find_pull_request(claim.task)
+        try:
+            existing_pr = self._tracker.find_pull_request(claim.task)
+        except RuntimeError as error:
+            return self._block(automation.name, claim.task, str(error))
         if existing_pr:
             self._tracker.transition(claim.task, TaskState.REVIEW, existing_pr)
             return TickResult(automation.name, "review", claim.task, existing_pr)
@@ -52,12 +58,20 @@ class AutomationService:
     ) -> TickResult:
         if not result.success:
             detail = result.error.strip() or f"worker exited {result.exit_code}"
-            self._tracker.transition(task, TaskState.BLOCKED, detail)
-            return TickResult(name, "blocked", task, detail=detail)
-        pr_url = self._tracker.find_pull_request(task)
-        if not pr_url:
-            detail = "Worker completed without an open pull request"
-            self._tracker.transition(task, TaskState.BLOCKED, detail)
-            return TickResult(name, "blocked", task, detail=detail)
+            return self._block(name, task, detail)
+        try:
+            pr_url = self._tracker.find_pull_request(task)
+            if not pr_url:
+                detail = self._tracker.find_policy_violation(task)
+                if detail is None:
+                    detail = "Worker completed without an open draft pull request"
+                return self._block(name, task, detail)
+        except RuntimeError as error:
+            return self._block(name, task, str(error))
         self._tracker.transition(task, TaskState.REVIEW, pr_url)
         return TickResult(name, "review", task, pr_url)
+
+    def _block(self, name: str, task: AutomationTask, detail: str) -> TickResult:
+        """Record an actionable terminal failure for a claimed or running task."""
+        self._tracker.transition(task, TaskState.BLOCKED, detail)
+        return TickResult(name, "blocked", task, detail=detail)

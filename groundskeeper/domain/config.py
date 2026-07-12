@@ -21,6 +21,7 @@ from groundskeeper.domain.triggers import (
 # Tools that can modify the working directory.
 WRITE_TOOLS = frozenset({"Write", "Edit", "Bash", "NotebookEdit"})
 _AUTOMATION_NAME_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
+DEFAULT_PI_TIMEOUT_SECONDS = 7200
 
 
 @dataclass(frozen=True)
@@ -154,6 +155,7 @@ class PiRunnerConfig:
     type: Literal["pi"] = "pi"
     approval: Literal["allow"] = "allow"
     session: Literal["deterministic"] = "deterministic"
+    timeout_seconds: int = DEFAULT_PI_TIMEOUT_SECONDS
 
 
 @dataclass(frozen=True)
@@ -334,6 +336,15 @@ def get_automations(config: dict[str, Any]) -> list[Automation]:
             raise ConfigError(
                 f"Automation '{name}' requires runner.session: deterministic"
             )
+        timeout_seconds = runner.get("timeout-seconds", DEFAULT_PI_TIMEOUT_SECONDS)
+        if (
+            not isinstance(timeout_seconds, int)
+            or isinstance(timeout_seconds, bool)
+            or timeout_seconds <= 0
+        ):
+            raise ConfigError(
+                f"Automation '{name}' requires positive runner.timeout-seconds"
+            )
         if not isinstance(policy, dict):
             raise ConfigError(f"Automation '{name}' policy must be a mapping")
         repository = source.get("repository")
@@ -398,7 +409,7 @@ def get_automations(config: dict[str, Any]) -> list[Automation]:
                     review_label=resolved_labels["review"],
                     blocked_label=resolved_labels["blocked"],
                 ),
-                runner=PiRunnerConfig(skill=skill),
+                runner=PiRunnerConfig(skill=skill, timeout_seconds=timeout_seconds),
                 policy=AutomationPolicy(),
             )
         )

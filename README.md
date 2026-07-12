@@ -9,8 +9,9 @@ runs skills on repository events.
 The first automation source is GitHub Issues and the first runner is Pi. A tick
 claims at most one trusted, explicitly-ready issue, renders its configured skill
 with a normalized task context, and runs it in Pi. Groundskeeper validates its
-fixed one-at-a-time, draft-only, and never-merge policy and independently checks
-a draft pull request with an exact GitHub closing reference before review.
+fixed policy and enforces the accepted-result postcondition: only an open draft
+pull request with an exact GitHub closing reference reaches review. It does not
+sandbox Pi or prevent a user-authorized process from merging a pull request.
 
 ```yaml
 automations:
@@ -30,6 +31,7 @@ automations:
       skill: issue-implementation
       approval: allow
       session: deterministic
+      timeout-seconds: 7200  # optional; default is two hours
     policy:
       concurrency: 1
       output: draft-pr
@@ -38,7 +40,8 @@ automations:
 
 Create `issue-implementation` as an ordinary skill under
 `.groundskeeper/skills/`. It receives its usual prompt plus `TASK_ID`,
-`TASK_TITLE`, `TASK_BODY`, `TASK_URL`, `REPOSITORY`, and `RECOVERY_CONTEXT`.
+`TASK_TITLE`, `TASK_BODY`, `TASK_URL`, `REPOSITORY`, `RECOVERY_CONTEXT`, and
+the fixed `POLICY_CONCURRENCY`, `POLICY_OUTPUT`, and `POLICY_MERGE` fields.
 Normal `gk run` and `gk render` behavior for that skill is unchanged.
 
 ```bash
@@ -57,9 +60,12 @@ comment. The JSON contract is versioned, and dry-run output deliberately omits
 issue bodies. Set a scheduler's working directory to the repository containing
 `.groundskeeper/config.yml`, or pass `gk automation --config PATH ...`.
 
-Each issue maps to a deterministic UUIDv5 Pi session and stable run name. If a
-process exits after claiming an issue, the next tick resumes that session and
-reconciles GitHub state. Issue discovery requests ready/running labels
+Each issue maps to a deterministic UUIDv5 Pi session and stable run name. Pi
+runs have a configurable positive timeout (`timeout-seconds`, default 7,200
+seconds); GitHub CLI operations have fixed 30-second timeouts. A timeout blocks
+the claimed issue with the command error and releases the host lock for retry.
+If a process exits after claiming an issue, the next tick resumes that session
+and reconciles GitHub state. Issue discovery requests ready/running labels
 server-side and is bounded at 1,000 open issues per state.
 
 Define AI agent skills as markdown prompt templates. Chain them into workflows. Run them locally or generate GitHub Actions workflows that run them on PRs or schedules.
