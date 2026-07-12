@@ -70,6 +70,20 @@ def test_success_requires_pr_and_transitions_to_review() -> None:
     assert tracker.transitions == [(TaskState.REVIEW, "https://github/pr/1")]
 
 
+def test_worker_output_pr_must_match_tracker_closing_reference() -> None:
+    tracker = FakeTracker()
+    result = AutomationService(
+        tracker,
+        FakeRunner(
+            WorkResult(True, pull_request_url="https://github.com/other/repo/pull/9")
+        ),
+    ).tick(AUTOMATION)
+    assert result.status == "blocked"
+    assert tracker.transitions == [
+        (TaskState.BLOCKED, "Worker completed without an open pull request")
+    ]
+
+
 def test_worker_failure_is_visible_and_recoverable() -> None:
     tracker = FakeTracker()
     result = AutomationService(
@@ -91,6 +105,8 @@ def test_existing_pr_reconciles_without_dispatch() -> None:
 def test_running_task_resumes_persisted_worker_and_reconciles() -> None:
     tracker = FakeTracker()
     tracker.list_running = lambda: [replace(TASK, state=TaskState.RUNNING)]  # type: ignore[method-assign]
+    pull_requests = iter([None, "https://github/pr/9"])
+    tracker.find_pull_request = lambda task: next(pull_requests)  # type: ignore[method-assign]
     runner = FakeRunner(WorkResult(True, pull_request_url="https://github/pr/9"))
     result = AutomationService(tracker, runner).tick(AUTOMATION)
     assert result.status == "review"

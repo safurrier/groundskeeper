@@ -54,7 +54,7 @@ class AutomationService:
             detail = result.error.strip() or f"worker exited {result.exit_code}"
             self._tracker.transition(task, TaskState.BLOCKED, detail)
             return TickResult(name, "blocked", task, detail=detail)
-        pr_url = result.pull_request_url or self._tracker.find_pull_request(task)
+        pr_url = self._tracker.find_pull_request(task)
         if not pr_url:
             detail = "Worker completed without an open pull request"
             self._tracker.transition(task, TaskState.BLOCKED, detail)
