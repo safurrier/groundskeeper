@@ -53,17 +53,25 @@ gk automation tick daily-maintenance --json
 
 `validate` checks configuration, skill resolution, the Pi executable, repository
 path, and fixed policy without contacting GitHub or claiming work. `tick` is
-noninteractive and uses a host-local advisory lock. Run exactly one scheduler
-host for each automation; multi-host scheduling is not supported. A successful
-no-work tick is safe; a failed worker moves the issue to `factory:blocked` with an actionable
-comment. The JSON contract is versioned, and dry-run output deliberately omits
+noninteractive and uses a host-local advisory lock keyed by normalized GitHub
+repository identity. Locks live under `$XDG_STATE_HOME/groundskeeper/locks`
+(or `~/.local/state/groundskeeper/locks`), so separate config worktrees for the
+same repository share one host lock. `GROUNDSKEEPER_STATE_HOME` is a narrow
+host/test override. Run exactly one scheduler host for each automation;
+multi-host scheduling is not supported. A successful no-work tick is safe. After
+any worker return, Groundskeeper first reconciles the accepted GitHub result: an
+open draft PR with the exact closing reference moves to review even if the worker
+reported a late failure. Otherwise, a failed worker moves the issue to
+`factory:blocked` with an actionable comment. The JSON contract is versioned,
+and dry-run output deliberately omits
 issue bodies. Set a scheduler's working directory to the repository containing
 `.groundskeeper/config.yml`, or pass `gk automation --config PATH ...`.
 
 Each issue maps to a deterministic UUIDv5 Pi session and stable run name. Pi
 runs have a configurable positive timeout (`timeout-seconds`, default 7,200
-seconds); GitHub CLI operations have fixed 30-second timeouts. A timeout blocks
-the claimed issue with the command error and releases the host lock for retry.
+seconds); GitHub CLI operations have fixed 30-second timeouts. After a timeout,
+Groundskeeper reconciles the same accepted GitHub result first; without one, it
+blocks the claimed issue with the command error and releases the host lock for retry.
 If a process exits after claiming an issue, the next tick resumes that session
 and reconciles GitHub state. Issue discovery requests ready/running labels
 server-side and is bounded at 1,000 open issues per state.

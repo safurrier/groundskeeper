@@ -56,20 +56,24 @@ class AutomationService:
     def _finish(
         self, name: str, task: AutomationTask, result: WorkResult
     ) -> TickResult:
+        """Reconcile durable GitHub state before trusting worker process status."""
+        try:
+            pr_url = self._tracker.find_pull_request(task)
+            if pr_url:
+                self._tracker.transition(task, TaskState.REVIEW, pr_url)
+                return TickResult(name, "review", task, pr_url)
+            violation = self._tracker.find_policy_violation(task)
+        except RuntimeError as error:
+            return self._block(name, task, str(error))
+
+        if violation is not None:
+            return self._block(name, task, violation)
         if not result.success:
             detail = result.error.strip() or f"worker exited {result.exit_code}"
             return self._block(name, task, detail)
-        try:
-            pr_url = self._tracker.find_pull_request(task)
-            if not pr_url:
-                detail = self._tracker.find_policy_violation(task)
-                if detail is None:
-                    detail = "Worker completed without an open draft pull request"
-                return self._block(name, task, detail)
-        except RuntimeError as error:
-            return self._block(name, task, str(error))
-        self._tracker.transition(task, TaskState.REVIEW, pr_url)
-        return TickResult(name, "review", task, pr_url)
+        return self._block(
+            name, task, "Worker completed without an open draft pull request"
+        )
 
     def _block(self, name: str, task: AutomationTask, detail: str) -> TickResult:
         """Record an actionable terminal failure for a claimed or running task."""

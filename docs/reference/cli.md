@@ -29,7 +29,9 @@ gk automation tick NAME [--dry-run] [--json]
 ```
 
 `list` and `show` inspect configured local automations. `show --json` includes
-the resolved repository path, lifecycle labels, runner settings, and policy.
+the resolved repository path, lifecycle labels, runner settings, policy, and
+selected-skill provenance (name, source kind, and path, never the prompt body).
+`validate --json` returns the same resolved skill provenance after checking it.
 `validate` checks strict config, named-skill resolution, Pi availability, the
 repository path, and the fixed draft-only/never-merge policy without contacting
 GitHub or starting work. `tick` runs one bounded reconciliation pass. Dry-run

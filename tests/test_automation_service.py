@@ -80,6 +80,16 @@ def test_success_requires_pr_and_transitions_to_review() -> None:
     assert tracker.transitions == [(TaskState.REVIEW, "https://github/pr/1")]
 
 
+def test_worker_failure_with_valid_draft_pr_reconciles_to_review() -> None:
+    tracker = FakeTracker()
+    tracker.pr = "https://github/pr/1"
+    result = AutomationService(
+        tracker, FakeRunner(WorkResult(False, error="worker timed out", exit_code=124))
+    ).tick(AUTOMATION)
+    assert result.status == "review"
+    assert tracker.transitions == [(TaskState.REVIEW, "https://github/pr/1")]
+
+
 def test_worker_output_pr_must_match_tracker_closing_reference() -> None:
     tracker = FakeTracker()
     result = AutomationService(

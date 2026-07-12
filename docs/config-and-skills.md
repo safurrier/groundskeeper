@@ -33,9 +33,15 @@ rendering is unchanged.
 
 Pi runners accept optional positive `timeout-seconds` (default: `7200`) for
 long-running development work. GitHub CLI operations use a fixed 30-second
-timeout. A Pi timeout becomes a blocked task with its actionable command error;
-the host lock is released when the tick exits. See the README for a complete
-configuration.
+timeout. After any worker return, Groundskeeper first reconciles the accepted
+open-draft closing PR; only when that result is absent does a Pi timeout become
+a blocked task with its actionable command error. The host lock is released when
+the tick exits. Automation entries are strict:
+unknown keys are rejected at the entry, source, runner, policy, and labels
+levels. For example, use `timeout-seconds`, not `timeout_seconds`, and
+`concurrency`, not `concurency`. A misspelled top-level `automation:` key is
+rejected; legacy top-level workflow configuration remains valid. See the README
+for a complete configuration.
 
 ## .groundskeeper/config.yml
 

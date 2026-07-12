@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -40,7 +41,7 @@ from groundskeeper.domain.errors import (
     SkillNotFoundError,
     SkillValidationError,
 )
-from groundskeeper.domain.models import RunContext, RunResult
+from groundskeeper.domain.models import RunContext, RunResult, Skill
 from groundskeeper.domain.parser import parse_skill_file
 from groundskeeper.protocols import SkillStore
 
@@ -145,9 +146,11 @@ def _automation_stores(
     return stores
 
 
-def _automation_summary(item: Automation) -> dict[str, object]:
+def _automation_summary(
+    item: Automation, skill: Skill | None = None
+) -> dict[str, object]:
     """Return a stable, compact automation description."""
-    return {
+    summary: dict[str, object] = {
         "name": item.name,
         "repository": item.source.repository,
         "repository_path": str(item.source.repository_path),
@@ -170,6 +173,13 @@ def _automation_summary(item: Automation) -> dict[str, object]:
             "merge": item.policy.merge,
         },
     }
+    if skill is not None:
+        summary["skill"] = {
+            "name": skill.name,
+            "source_kind": skill.source.kind,
+            "path": str(skill.source.path),
+        }
+    return summary
 
 
 def _automation_envelope(
@@ -202,28 +212,30 @@ def _load_automation(config_path: Path, name: str) -> Automation:
     return definition
 
 
-def _automation_lock_path(config_path: Path, definition: Automation) -> Path:
-    """Return a stable host-local lock shared by one target repository."""
-    repository_key = hashlib.sha256(
-        definition.source.repository.encode("utf-8")
-    ).hexdigest()[:16]
-    return config_path.parent / ".locks" / f"repository-{repository_key}.lock"
+def _automation_state_root() -> Path:
+    """Return the host-local state root, with a narrow test/host override."""
+    configured_root = os.environ.get("GROUNDSKEEPER_STATE_HOME")
+    if configured_root:
+        return Path(configured_root).expanduser() / "groundskeeper"
+    xdg_state_home = os.environ.get("XDG_STATE_HOME")
+    if xdg_state_home:
+        return Path(xdg_state_home).expanduser() / "groundskeeper"
+    return Path.home() / ".local" / "state" / "groundskeeper"
 
 
-def _build_automation_runner(
-    definition: Automation,
-    config_path: Path,
-    extra_skill_paths: tuple[str, ...],
-    process: ProcessClient,
-    require_available: bool = True,
-) -> PiAutomationRunner:
-    """Construct the one supported typed automation runner after preflight checks."""
-    repository_path = definition.source.repository_path
-    if not repository_path.is_dir():
-        raise ConfigError(
-            f"Automation '{definition.name}' repository path does not exist: "
-            f"{repository_path}"
-        )
+def _automation_lock_path(definition: Automation) -> Path:
+    """Return a stable host-local lock shared by one normalized repository."""
+    repository_identity = definition.source.repository.strip().casefold()
+    repository_key = hashlib.sha256(repository_identity.encode("utf-8")).hexdigest()[
+        :16
+    ]
+    return _automation_state_root() / "locks" / f"repository-{repository_key}.lock"
+
+
+def _resolve_automation_skill(
+    definition: Automation, config_path: Path, extra_skill_paths: tuple[str, ...]
+) -> Skill:
+    """Resolve the configured skill before a tick can claim external work."""
     skill = resolve_skill(
         definition.runner.skill, _automation_stores(config_path, extra_skill_paths)
     )
@@ -233,6 +245,27 @@ def _build_automation_runner(
             f"'{definition.runner.skill}'. Add it under {config_path.parent / 'skills'} "
             "or pass --skill-path."
         )
+    return skill
+
+
+def _build_automation_runner(
+    definition: Automation,
+    config_path: Path,
+    extra_skill_paths: tuple[str, ...],
+    process: ProcessClient,
+    require_available: bool = True,
+    skill: Skill | None = None,
+) -> PiAutomationRunner:
+    """Construct the one supported typed automation runner after preflight checks."""
+    repository_path = definition.source.repository_path
+    if not repository_path.is_dir():
+        raise ConfigError(
+            f"Automation '{definition.name}' repository path does not exist: "
+            f"{repository_path}"
+        )
+    resolved_skill = skill or _resolve_automation_skill(
+        definition, config_path, extra_skill_paths
+    )
     client = PiClient(process)
     if require_available and not client.is_available():
         raise ConfigError(
@@ -241,7 +274,7 @@ def _build_automation_runner(
     return PiAutomationRunner(
         client,
         repository_path,
-        AutomationSkillRenderer(skill, definition.policy),
+        AutomationSkillRenderer(resolved_skill, definition.policy),
         definition.runner,
     )
 
@@ -260,7 +293,11 @@ Exit codes: 0 listed successfully, 2 invalid configuration.
 @click.option("--json", "json_output", is_flag=True, help="Emit versioned JSON output.")
 @click.pass_context
 def automation_list(ctx: click.Context, json_output: bool) -> None:
-    """List configured automations without contacting external services."""
+    """List configured automations without contacting external services.
+
+    Use when choosing an automation name. Don't use for one automation's
+    resolved settings; use `gk automation show NAME` instead.
+    """
     try:
         items = get_automations(load_config(_automation_config_path(ctx)))
     except ConfigError as error:
@@ -292,13 +329,20 @@ Exit codes: 0 found, 2 invalid configuration or unknown automation.
 @click.option("--json", "json_output", is_flag=True, help="Emit versioned JSON output.")
 @click.pass_context
 def automation_show(ctx: click.Context, name: str, json_output: bool) -> None:
-    """Show one automation's configured source, runner, and safety policy."""
+    """Show one automation's resolved source, skill, runner, and safety policy.
+
+    Use when inspecting one automation. Don't use to check executable and path
+    readiness; use `gk automation validate NAME` instead.
+    """
+    config_path = _automation_config_path(ctx)
+    extra = ctx.obj.get("extra_skill_paths", ()) if ctx.obj else ()
     try:
-        definition = _load_automation(_automation_config_path(ctx), name)
+        definition = _load_automation(config_path, name)
+        skill = _resolve_automation_skill(definition, config_path, extra)
     except ConfigError as error:
         _automation_error(str(error), json_output)
         return
-    summary = _automation_summary(definition)
+    summary = _automation_summary(definition, skill)
     if json_output:
         click.echo(_automation_envelope("ok", {"automation": summary}))
         return
@@ -324,7 +368,9 @@ def automation_validate(
 ) -> None:
     """Validate config, skill resolution, Pi availability, and local repository paths.
 
-    This command never claims issues, changes labels, or starts a worker.
+    Use when changing configuration or before scheduling a tick. Don't use to
+    select work; use `gk automation tick NAME --dry-run` instead. This command
+    never claims issues, changes labels, or starts a worker.
     """
     config_path = _automation_config_path(ctx)
     extra = ctx.obj.get("extra_skill_paths", ()) if ctx.obj else ()
@@ -336,12 +382,17 @@ def automation_validate(
                 raise ConfigError(
                     f"Automation not found: {name}. Run 'gk automation list'."
                 )
+        summaries: list[dict[str, object]] = []
         for item in items:
-            _build_automation_runner(item, config_path, extra, ProcessClient())
+            skill = _resolve_automation_skill(item, config_path, extra)
+            _build_automation_runner(
+                item, config_path, extra, ProcessClient(), skill=skill
+            )
+            summaries.append(_automation_summary(item, skill))
     except ConfigError as error:
         _automation_error(str(error), json_output)
         return
-    data = {"automations": [_automation_summary(item) for item in items]}
+    data = {"automations": summaries}
     if json_output:
         click.echo(_automation_envelope("ok", data))
         return
@@ -369,7 +420,8 @@ def automation_tick(
 ) -> None:
     """Run one bounded reconciliation pass for NAME.
 
-    Use validate first after configuration changes. Dry-run omits issue bodies
+    Use when dispatching or reconciling work. Don't use to inspect configuration;
+    use `gk automation show` or `validate` first. Dry-run omits issue bodies
     from output and never changes GitHub state or starts Pi.
     """
     config_path = _automation_config_path(ctx)
@@ -383,7 +435,7 @@ def automation_tick(
         tracker = GitHubIssuesTracker(
             GhClient(process, definition.source.repository_path), definition.source
         )
-        lock_path = _automation_lock_path(config_path, definition)
+        lock_path = _automation_lock_path(definition)
         with TickLock(lock_path):
             result = AutomationService(tracker, runner).tick(
                 definition, dry_run=dry_run

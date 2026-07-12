@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 import yaml
 from click.testing import CliRunner
 
@@ -23,6 +24,7 @@ automations:
       skill: codex-code-review
       approval: allow
       session: deterministic
+      timeout-seconds: 7200
     policy:
       concurrency: 1
       output: draft-pr
@@ -46,14 +48,24 @@ def test_automation_list_json(tmp_path: Path) -> None:
     assert payload["data"]["automations"][0]["runner"]["skill"] == "codex-code-review"
 
 
-def test_same_repository_automations_share_one_host_lock() -> None:
+def test_repository_locks_are_host_scoped_and_identity_stable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("GROUNDSKEEPER_STATE_HOME", str(tmp_path / "state"))
     config = CONFIG.replace("daily-dev:", "queue-a:") + CONFIG.replace(
         "daily-dev:", "queue-b:"
     ).replace("automations:\n", "")
     queue_a, queue_b = get_automations(yaml.safe_load(config))
-    config_path = Path("/tmp/.groundskeeper/config.yml")
-    assert _automation_lock_path(config_path, queue_a) == _automation_lock_path(
-        config_path, queue_b
+    other_repo = get_automations(
+        yaml.safe_load(
+            CONFIG.replace("daily-dev:", "queue-c:").replace("me/dots", "me/other")
+        )
+    )[0]
+    assert _automation_lock_path(queue_a) == _automation_lock_path(queue_b)
+    assert _automation_lock_path(queue_a) != _automation_lock_path(other_repo)
+    assert (
+        _automation_lock_path(queue_a).parent
+        == tmp_path / "state" / "groundskeeper" / "locks"
     )
 
 
@@ -73,8 +85,21 @@ def test_automation_show_and_validate_use_versioned_envelopes(
     assert shown["repository_path"] == str(Path("/tmp").resolve())
     assert shown["labels"]["review"] == "factory:review"
     assert shown["runner"]["timeout_seconds"] == 7200
+    assert shown["skill"] == {
+        "name": "codex-code-review",
+        "source_kind": "builtin",
+        "path": str(
+            Path(__file__).parents[2]
+            / "groundskeeper"
+            / "builtins"
+            / "skills"
+            / "codex-code-review"
+        ),
+    }
     assert validate.exit_code == 0
-    assert json.loads(validate.output)["version"] == 1
+    validated = json.loads(validate.output)
+    assert validated["version"] == 1
+    assert validated["data"]["automations"][0]["skill"]["name"] == "codex-code-review"
 
 
 def test_automation_leaf_help_has_configured_examples() -> None:
@@ -172,6 +197,26 @@ def test_tick_unknown_name_json_envelope(tmp_path: Path) -> None:
     assert result.exit_code == 2
     assert payload["status"] == "error" and payload["exit_code"] == 2
     assert payload["version"] == 1
+
+
+@pytest.mark.parametrize(
+    ("replacement", "expected"),
+    [
+        ("timeout-seconds", "timeout_seconds"),
+        ("concurrency", "concurency"),
+    ],
+)
+def test_strict_config_errors_offer_copyable_corrections(
+    replacement: str, expected: str, tmp_path: Path
+) -> None:
+    invalid_config = CONFIG.replace(replacement, expected)
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        Path(".groundskeeper").mkdir(exist_ok=True)
+        Path(".groundskeeper/config.yml").write_text(invalid_config)
+        result = runner.invoke(cli, ["automation", "validate", "daily-dev", "--json"])
+    assert result.exit_code == 2
+    assert f"Use '{replacement}'." in json.loads(result.output)["data"]["error"]
 
 
 def test_malformed_config_json_envelope(tmp_path: Path) -> None:

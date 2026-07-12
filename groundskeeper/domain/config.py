@@ -305,8 +305,26 @@ def get_workflow(config: dict[str, Any], name: str) -> Workflow | None:
     return None
 
 
+def _reject_unknown_automation_keys(
+    values: dict[str, Any],
+    allowed: set[str],
+    field_path: str,
+    corrections: dict[str, str] | None = None,
+) -> None:
+    """Reject typos at the strict automation ingress boundary."""
+    unknown = sorted(set(values) - allowed)
+    if not unknown:
+        return
+    key = unknown[0]
+    correction = (corrections or {}).get(key)
+    suggestion = f" Use '{correction}'." if correction else ""
+    raise ConfigError(f"{field_path} has unknown key '{key}'.{suggestion}")
+
+
 def get_automations(config: dict[str, Any]) -> list[Automation]:
     """Parse strict automation definitions separately from legacy workflows."""
+    if "automation" in config:
+        raise ConfigError("Unknown top-level key 'automation'. Use 'automations'.")
     raw = config.get("automations", {})
     if raw is None:
         return []
@@ -318,6 +336,10 @@ def get_automations(config: dict[str, Any]) -> list[Automation]:
             raise ConfigError("Automation names must be kebab-case")
         if not isinstance(value, dict):
             raise ConfigError(f"Automation '{name}' must be a mapping")
+        entry_path = f"automations.{name}"
+        _reject_unknown_automation_keys(
+            value, {"source", "runner", "policy"}, entry_path
+        )
         source = value.get("source")
         runner = value.get("runner")
         policy = value.get("policy", {})
@@ -325,8 +347,19 @@ def get_automations(config: dict[str, Any]) -> list[Automation]:
             raise ConfigError(
                 f"Automation '{name}' requires source.type: github-issues"
             )
+        _reject_unknown_automation_keys(
+            source,
+            {"type", "repository", "repository-path", "trusted-authors", "labels"},
+            f"{entry_path}.source",
+        )
         if not isinstance(runner, dict) or runner.get("type") != "pi":
             raise ConfigError(f"Automation '{name}' requires runner.type: pi")
+        _reject_unknown_automation_keys(
+            runner,
+            {"type", "skill", "approval", "session", "timeout-seconds"},
+            f"{entry_path}.runner",
+            {"timeout_seconds": "timeout-seconds"},
+        )
         skill = runner.get("skill")
         if not isinstance(skill, str) or not skill:
             raise ConfigError(f"Automation '{name}' requires runner.skill")
@@ -347,6 +380,12 @@ def get_automations(config: dict[str, Any]) -> list[Automation]:
             )
         if not isinstance(policy, dict):
             raise ConfigError(f"Automation '{name}' policy must be a mapping")
+        _reject_unknown_automation_keys(
+            policy,
+            {"concurrency", "output", "merge"},
+            f"{entry_path}.policy",
+            {"concurency": "concurrency"},
+        )
         repository = source.get("repository")
         repository_path = source.get("repository-path")
         authors = source.get("trusted-authors")
@@ -380,8 +419,9 @@ def get_automations(config: dict[str, Any]) -> list[Automation]:
             "review": "factory:review",
             "blocked": "factory:blocked",
         }
-        if set(labels) - set(label_defaults):
-            raise ConfigError(f"Automation '{name}' source.labels has unknown keys")
+        _reject_unknown_automation_keys(
+            labels, set(label_defaults), f"{entry_path}.source.labels"
+        )
         resolved_labels: dict[str, str] = {}
         for label_name, default in label_defaults.items():
             label = labels.get(label_name, default)

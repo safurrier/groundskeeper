@@ -64,6 +64,56 @@ def test_rejects_non_positive_pi_timeout() -> None:
         get_automations(config)
 
 
+def _valid_automation_config() -> dict[str, object]:
+    return {
+        "automations": {
+            "daily": {
+                "source": {
+                    "type": "github-issues",
+                    "repository": "me/dots",
+                    "repository-path": "/tmp/dots",
+                    "trusted-authors": ["me"],
+                    "labels": {},
+                },
+                "runner": {
+                    "type": "pi",
+                    "skill": "issue-implementation",
+                    "approval": "allow",
+                    "session": "deterministic",
+                },
+                "policy": {"concurrency": 1, "output": "draft-pr", "merge": "never"},
+            }
+        }
+    }
+
+
+@pytest.mark.parametrize(
+    ("section", "key", "expected"),
+    [
+        ("entry", "unexpected", "automations.daily"),
+        ("source", "repo", "automations.daily.source"),
+        ("runner", "timeout_seconds", "automations.daily.runner"),
+        ("policy", "concurency", "automations.daily.policy"),
+        ("labels", "done", "automations.daily.source.labels"),
+    ],
+)
+def test_rejects_unknown_automation_keys(section: str, key: str, expected: str) -> None:
+    config = _valid_automation_config()
+    automation = config["automations"]["daily"]  # type: ignore[index]
+    if section == "labels":
+        target = automation["source"]["labels"]  # type: ignore[index]
+    else:
+        target = automation if section == "entry" else automation[section]  # type: ignore[index]
+    target[key] = "invalid"  # type: ignore[index]
+    with pytest.raises(ConfigError, match=expected):
+        get_automations(config)  # type: ignore[arg-type]
+
+
+def test_rejects_misspelled_top_level_automation() -> None:
+    with pytest.raises(ConfigError, match="Use 'automations'"):
+        get_automations({"automation": {}})
+
+
 @pytest.mark.parametrize(
     ("runner", "message"),
     [
