@@ -15,6 +15,10 @@ from .conftest import requires_claude, requires_gk
 def _factory_repo(tmp_path: Path, gh_output: str) -> tuple[Path, dict[str, str]]:
     repo = tmp_path / "factory"
     (repo / ".groundskeeper").mkdir(parents=True)
+    (repo / ".groundskeeper/skills/issue-implementation").mkdir(parents=True)
+    (repo / ".groundskeeper/skills/issue-implementation/SKILL.md").write_text(
+        "---\nname: issue-implementation\ndescription: Implement one issue\n---\n\nImplement it."
+    )
     (repo / ".groundskeeper/config.yml").write_text(
         f"""automations:
   daily:
@@ -25,6 +29,9 @@ def _factory_repo(tmp_path: Path, gh_output: str) -> tuple[Path, dict[str, str]]
       trusted-authors: [alex]
     runner:
       type: pi
+      skill: issue-implementation
+      approval: allow
+      session: deterministic
     policy:
       concurrency: 1
       output: draft-pr
@@ -124,11 +131,37 @@ def _stateful_factory_repo(tmp_path: Path) -> tuple[Path, dict[str, str], Path, 
 
 @requires_gk
 class TestAutomationE2E:
+    def test_list_show_and_validate_through_real_process(self, tmp_path: Path) -> None:
+        repo, env = _factory_repo(tmp_path, "[]")
+        listed = run_gk("automation", "list", "--json", cwd=repo, env=env)
+        shown = run_gk("automation", "show", "daily", "--json", cwd=repo, env=env)
+        validated = run_gk(
+            "automation", "validate", "daily", "--json", cwd=repo, env=env
+        )
+        assert listed.returncode == shown.returncode == validated.returncode == 0
+        assert json.loads(listed.stdout)["data"]["automations"][0]["name"] == "daily"
+        assert (
+            json.loads(shown.stdout)["data"]["automation"]["runner"]["skill"]
+            == "issue-implementation"
+        )
+        assert json.loads(validated.stdout)["version"] == 1
+
+    def test_dry_run_is_compact_and_does_not_launch_pi(self, tmp_path: Path) -> None:
+        repo, env = _factory_flow_repo(tmp_path, "ready")
+        result = run_gk(
+            "automation", "tick", "daily", "--dry-run", "--json", cwd=repo, env=env
+        )
+        assert result.returncode == 0
+        assert json.loads(result.stdout)["status"] == "would-dispatch"
+        assert "Acceptance" not in result.stdout
+
     def test_no_work_json_through_real_process(self, tmp_path: Path) -> None:
         repo, env = _factory_repo(tmp_path, "[]")
         result = run_gk("automation", "tick", "daily", "--json", cwd=repo, env=env)
         assert result.returncode == 0
-        assert json.loads(result.stdout)["status"] == "no-work"
+        payload = json.loads(result.stdout)
+        assert payload["status"] == "no-work"
+        assert payload["version"] == 1
 
     def test_malformed_gh_json_is_structured_error(self, tmp_path: Path) -> None:
         repo, env = _factory_repo(tmp_path, "not-json")
@@ -143,7 +176,9 @@ class TestAutomationE2E:
         assert result.returncode == 0
         payload = json.loads(result.stdout)
         assert payload["status"] == "review"
-        assert payload["pull_request_url"] == "https://github.com/me/repo/pull/9"
+        assert (
+            payload["data"]["pull_request_url"] == "https://github.com/me/repo/pull/9"
+        )
 
     def test_worker_failure_is_blocked(self, tmp_path: Path) -> None:
         repo, env = _factory_flow_repo(tmp_path, "ready", pi_success=False)
@@ -166,7 +201,7 @@ class TestAutomationE2E:
 
         second = run_gk("automation", "tick", "daily", "--json", cwd=repo, env=env)
         assert second.returncode == 0
-        assert json.loads(second.stdout)["pull_request_url"].endswith("/pull/9")
+        assert json.loads(second.stdout)["data"]["pull_request_url"].endswith("/pull/9")
 
         mutations = gh_log.read_text().splitlines()
         assert mutations == ["ready->running", "running->review", "comment"]
@@ -180,7 +215,7 @@ class TestAutomationE2E:
         first_session = pi_calls[0].split("--session-id ", 1)[1].split()[0]
         second_session = pi_calls[1].split("--session-id ", 1)[1].split()[0]
         assert first_session == second_session
-        assert "Resume this persisted factory run" in pi_log_text
+        assert "RECOVERY_CONTEXT: Resume the deterministic session" in pi_log_text
 
 
 def run_gk(

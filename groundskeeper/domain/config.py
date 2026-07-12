@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 
@@ -19,6 +20,7 @@ from groundskeeper.domain.triggers import (
 
 # Tools that can modify the working directory.
 WRITE_TOOLS = frozenset({"Write", "Edit", "Bash", "NotebookEdit"})
+_AUTOMATION_NAME_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
 
 
 @dataclass(frozen=True)
@@ -146,9 +148,12 @@ class AutomationPolicy:
 
 @dataclass(frozen=True)
 class PiRunnerConfig:
-    """Configuration for the Pi execution adapter."""
+    """Typed, deterministic configuration for the Pi execution adapter."""
 
-    type: str = "pi"
+    skill: str
+    type: Literal["pi"] = "pi"
+    approval: Literal["allow"] = "allow"
+    session: Literal["deterministic"] = "deterministic"
 
 
 @dataclass(frozen=True)
@@ -157,7 +162,7 @@ class Automation:
 
     name: str
     source: GitHubIssuesSource
-    runner: PiRunnerConfig = field(default_factory=PiRunnerConfig)
+    runner: PiRunnerConfig
     policy: AutomationPolicy = field(default_factory=AutomationPolicy)
 
 
@@ -307,6 +312,8 @@ def get_automations(config: dict[str, Any]) -> list[Automation]:
         raise ConfigError("'automations' must be a mapping")
     automations: list[Automation] = []
     for name, value in raw.items():
+        if not isinstance(name, str) or not _AUTOMATION_NAME_RE.match(name):
+            raise ConfigError("Automation names must be kebab-case")
         if not isinstance(value, dict):
             raise ConfigError(f"Automation '{name}' must be a mapping")
         source = value.get("source")
@@ -318,6 +325,15 @@ def get_automations(config: dict[str, Any]) -> list[Automation]:
             )
         if not isinstance(runner, dict) or runner.get("type") != "pi":
             raise ConfigError(f"Automation '{name}' requires runner.type: pi")
+        skill = runner.get("skill")
+        if not isinstance(skill, str) or not skill:
+            raise ConfigError(f"Automation '{name}' requires runner.skill")
+        if runner.get("approval") != "allow":
+            raise ConfigError(f"Automation '{name}' requires runner.approval: allow")
+        if runner.get("session") != "deterministic":
+            raise ConfigError(
+                f"Automation '{name}' requires runner.session: deterministic"
+            )
         if not isinstance(policy, dict):
             raise ConfigError(f"Automation '{name}' policy must be a mapping")
         repository = source.get("repository")
@@ -347,6 +363,24 @@ def get_automations(config: dict[str, Any]) -> list[Automation]:
         labels = source.get("labels", {})
         if not isinstance(labels, dict):
             raise ConfigError(f"Automation '{name}' source.labels must be a mapping")
+        label_defaults = {
+            "ready": "factory:ready",
+            "running": "factory:running",
+            "review": "factory:review",
+            "blocked": "factory:blocked",
+        }
+        if set(labels) - set(label_defaults):
+            raise ConfigError(f"Automation '{name}' source.labels has unknown keys")
+        resolved_labels: dict[str, str] = {}
+        for label_name, default in label_defaults.items():
+            label = labels.get(label_name, default)
+            if not isinstance(label, str) or not label.strip():
+                raise ConfigError(
+                    f"Automation '{name}' source.labels.{label_name} must be a non-empty string"
+                )
+            resolved_labels[label_name] = label
+        if len(set(resolved_labels.values())) != len(resolved_labels):
+            raise ConfigError(f"Automation '{name}' source.labels must be distinct")
         path = Path(repository_path).expanduser()
         if not path.is_absolute():
             raise ConfigError(
@@ -359,11 +393,12 @@ def get_automations(config: dict[str, Any]) -> list[Automation]:
                     repository=repository,
                     repository_path=path.resolve(),
                     trusted_authors=tuple(authors),
-                    ready_label=str(labels.get("ready", "factory:ready")),
-                    running_label=str(labels.get("running", "factory:running")),
-                    review_label=str(labels.get("review", "factory:review")),
-                    blocked_label=str(labels.get("blocked", "factory:blocked")),
+                    ready_label=resolved_labels["ready"],
+                    running_label=resolved_labels["running"],
+                    review_label=resolved_labels["review"],
+                    blocked_label=resolved_labels["blocked"],
                 ),
+                runner=PiRunnerConfig(skill=skill),
                 policy=AutomationPolicy(),
             )
         )

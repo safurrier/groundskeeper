@@ -18,19 +18,28 @@ index:
 
 ## `gk automation`
 
-`gk automation list [--json]` lists configured local automations.
+Automation commands use `.groundskeeper/config.yml` by default. Use
+`gk automation --config PATH ...` to select a different file.
 
-`gk automation tick NAME [--dry-run] [--json]` runs one bounded pass. Dry-run
-selects and reports eligible work without labels, comments, or worker launch.
-JSON output includes the automation name, status, normalized task, PR URL, and
-detail. A no-work tick exits successfully. Ticks are noninteractive and use a
-single-host advisory lock.
+```bash
+gk automation list [--json]
+gk automation show NAME [--json]
+gk automation validate [NAME] [--json]
+gk automation tick NAME [--dry-run] [--json]
+```
 
-JSON errors use `{"status":"error","error":"...","exit_code":2}`. Exit `0`
-means no work, review-ready work, or a successful dry-run. Exit `2` is a
-configuration, command, tracker, or lock error; `4` is claim contention; and
-`5` is a blocked worker. Configure schedulers with the repository containing
-`.groundskeeper/config.yml` as their working directory.
+`list` and `show` inspect configured local automations. `validate` checks strict
+config, named-skill resolution, Pi availability, the repository path, and the
+fixed draft-only/never-merge policy without contacting GitHub or starting work.
+`tick` runs one bounded reconciliation pass. Dry-run selects and reports eligible
+work without labels, comments, or worker launch. Its compact output omits issue
+bodies.
+
+All JSON responses use a versioned envelope:
+`{"version":1,"status":"...","data":{...},"exit_code":N}`. Exit `0` means
+no work, review-ready work, or a successful dry-run. Exit `2` is a configuration,
+command, tracker, or lock error; `4` is claim contention; and `5` is a blocked
+worker. Commands are noninteractive and ticks use a single-host advisory lock.
 
 ## `gk init`
 

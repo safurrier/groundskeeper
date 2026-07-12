@@ -8,13 +8,15 @@ from groundskeeper.domain.automation import (
     TaskState,
     WorkResult,
 )
-from groundskeeper.domain.config import Automation, GitHubIssuesSource
+from groundskeeper.domain.config import Automation, GitHubIssuesSource, PiRunnerConfig
 
 TASK = AutomationTask(
     "fake", "7", "Do work", "Details", "https://task/7", "alex", "me/dots"
 )
 AUTOMATION = Automation(
-    "daily", GitHubIssuesSource("me/dots", Path("/tmp/dots"), ("alex",))
+    "daily",
+    GitHubIssuesSource("me/dots", Path("/tmp/dots"), ("alex",)),
+    PiRunnerConfig(skill="issue-implementation"),
 )
 
 

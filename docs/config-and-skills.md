@@ -16,13 +16,17 @@ index:
 ## Local automations
 
 `automations:` is separate from `workflows:`. Workflows describe skill chains
-and the legacy GitHub Actions generation path; automations select trusted work
-from a tracker and dispatch it to an existing local development workflow.
+for local or GitHub Actions use; automations select trusted work from a tracker
+and dispatch it through one named Groundskeeper skill.
 
 The initial provider pair is `source.type: github-issues` and `runner.type: pi`.
-Each source requires `repository`, `repository-path`, and at least one
-`trusted-author`. Safety policy is strict: concurrency is `1`, output is
-`draft-pr`, and merge is `never`. See the README for a complete configuration.
+A Pi runner must explicitly name `skill`, use `approval: allow`, and use
+`session: deterministic`. Each source requires `repository`, `repository-path`,
+and at least one `trusted-author`. Safety policy is strict: concurrency is `1`,
+output is `draft-pr`, and merge is `never`. The policy is validated outside the
+skill prompt. An automation skill receives normalized `TASK_ID`, `TASK_TITLE`,
+`TASK_BODY`, `TASK_URL`, `REPOSITORY`, and `RECOVERY_CONTEXT`; ordinary skill
+rendering is unchanged. See the README for a complete configuration.
 
 ## .groundskeeper/config.yml
 
