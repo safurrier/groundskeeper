@@ -114,6 +114,12 @@ def test_rejects_misspelled_top_level_automation() -> None:
         get_automations({"automation": {}})
 
 
+@pytest.mark.parametrize("key", ["automtion", "automationz", "foo"])
+def test_rejects_every_unknown_top_level_key(key: str) -> None:
+    with pytest.raises(ConfigError, match=rf"config has unknown key '{key}'"):
+        get_automations({key: {}})
+
+
 @pytest.mark.parametrize(
     ("runner", "message"),
     [

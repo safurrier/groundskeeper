@@ -12,11 +12,20 @@ from groundskeeper.adapters.process import ProcessClient
 @pytest.mark.skipif(os.name != "posix", reason="process groups require POSIX")
 def test_timeout_kills_descendant_process_group(tmp_path: Path) -> None:
     child_pid_path = tmp_path / "child.pid"
-    child_script = "import time; time.sleep(60)"
+    child_ready_path = tmp_path / "child.ready"
+    child_script = (
+        "import pathlib, signal, time; "
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+        f"pathlib.Path({str(child_ready_path)!r}).write_text('ready'); "
+        "time.sleep(60)"
+    )
     parent_script = (
         "import pathlib, subprocess, sys, time; "
         f"child = subprocess.Popen([sys.executable, '-c', {child_script!r}]); "
         f"pathlib.Path({str(child_pid_path)!r}).write_text(str(child.pid)); "
+        f"ready = pathlib.Path({str(child_ready_path)!r}); "
+        "deadline = time.monotonic() + 5; "
+        "\nwhile not ready.exists() and time.monotonic() < deadline: time.sleep(0.01); "
         "time.sleep(60)"
     )
 

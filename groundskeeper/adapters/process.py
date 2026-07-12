@@ -79,12 +79,22 @@ class ProcessClient:
         try:
             process.wait(timeout=PROCESS_TERMINATION_GRACE_SECONDS)
         except subprocess.TimeoutExpired:
-            if os.name == "posix":
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-            else:
-                process.kill()
+            pass
+
+        # The direct process may exit on SIGTERM while a descendant in the same
+        # group ignores it. Always kill any remaining group before releasing the
+        # repository lock or waiting on inherited stdout/stderr pipes.
+        if os.name == "posix":
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        elif process.poll() is None:
+            process.kill()
+
+        try:
+            process.wait(timeout=PROCESS_TERMINATION_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            process.kill()
         finally:
             process.communicate()
