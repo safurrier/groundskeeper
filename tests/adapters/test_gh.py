@@ -30,8 +30,8 @@ def test_issue_discovery_is_server_filtered_and_bounded() -> None:
 
 def test_linked_pr_matches_exact_closing_issue_reference() -> None:
     process = FakeProcess(
-        '[{"url":"https://pr/incidental","closingIssuesReferences":[{"number":112}]},'
-        '{"url":"https://pr/exact","closingIssuesReferences":[{"number":12}]}]'
+        '[{"url":"https://pr/incidental","isDraft":true,"closingIssuesReferences":[{"number":112}]},'
+        '{"url":"https://pr/exact","isDraft":true,"closingIssuesReferences":[{"number":12}]}]'
     )
     assert (
         GhClient(process, Path(".")).linked_pull_request("me/repo", 12)
@@ -44,14 +44,22 @@ def test_linked_pr_matches_exact_closing_issue_reference() -> None:
 
 def test_linked_pr_finds_exact_reference_after_first_hundred() -> None:
     unrelated = ",".join(
-        f'{{"url":"https://pr/{number}","closingIssuesReferences":[{{"number":{number + 1000}}}]}}'
+        f'{{"url":"https://pr/{number}","isDraft":true,"closingIssuesReferences":[{{"number":{number + 1000}}}]}}'
         for number in range(150)
     )
     process = FakeProcess(
-        f'[{unrelated},{{"url":"https://pr/exact",'
+        f'[{unrelated},{{"url":"https://pr/exact","isDraft":true,'
         '"closingIssuesReferences":[{"number":12}]}]'
     )
     assert (
         GhClient(process, Path(".")).linked_pull_request("me/repo", 12)
         == "https://pr/exact"
     )
+
+
+def test_linked_pr_ignores_non_draft_closing_reference() -> None:
+    process = FakeProcess(
+        '[{"url":"https://pr/ready","isDraft":false,'
+        '"closingIssuesReferences":[{"number":12}]}]'
+    )
+    assert GhClient(process, Path(".")).linked_pull_request("me/repo", 12) is None

@@ -143,7 +143,7 @@ class GhClient:
                 "--state",
                 "open",
                 "--json",
-                "url,closingIssuesReferences",
+                "url,isDraft,closingIssuesReferences",
                 "--limit",
                 "1000",
             ),
@@ -159,6 +159,8 @@ class GhClient:
                 if not isinstance(pull_request, dict):
                     raise TypeError
                 pr_data = cast(dict[str, object], pull_request)
+                if pr_data.get("isDraft") is not True:
+                    continue
                 references = pr_data.get("closingIssuesReferences")
                 if not isinstance(references, list):
                     raise TypeError

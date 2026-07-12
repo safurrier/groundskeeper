@@ -46,6 +46,7 @@ def _factory_flow_repo(
 ) -> tuple[Path, dict[str, str]]:
     repo, env = _factory_repo(tmp_path, "[]")
     binary_dir = tmp_path / "bin"
+    pr_created = tmp_path / "pr-created"
     issue = (
         '[{"number":7,"title":"Do work","body":"Acceptance",'
         '"url":"https://github.com/me/repo/issues/7",'
@@ -56,7 +57,10 @@ def _factory_flow_repo(
         'case "$*" in\n'
         f"  *\"issue list\"*\"factory:{state}\"*) printf '%s' '{issue}' ;;\n"
         "  *\"issue list\"*) printf '%s' '[]' ;;\n"
-        "  *\"pr list\"*) printf '%s' '[]' ;;\n"
+        f"  *\"pr list\"*) if [ -f '{pr_created}' ]; then "
+        'printf \'%s\' \'[{"url":"https://github.com/me/repo/pull/9",'
+        '"isDraft":true,"closingIssuesReferences":[{"number":7}]}]\'; '
+        "else printf '%s' '[]'; fi ;;\n"
         "  *) printf '%s' '' ;;\n"
         "esac\n"
     )
@@ -64,7 +68,7 @@ def _factory_flow_repo(
     pi.write_text(
         "#!/bin/sh\n"
         + (
-            "printf '%s' 'https://github.com/me/repo/pull/9'\n"
+            f"touch '{pr_created}'\nprintf '%s' 'https://github.com/me/repo/pull/9'\n"
             if pi_success
             else "echo 'worker failed' >&2\nexit 1\n"
         )
@@ -81,6 +85,7 @@ def _stateful_factory_repo(tmp_path: Path) -> tuple[Path, dict[str, str], Path, 
     gh_log = tmp_path / "gh.log"
     pi_log = tmp_path / "pi.log"
     started = tmp_path / "pi-started"
+    pr_created = tmp_path / "pr-created"
     issue_prefix = (
         '[{"number":7,"title":"Do work","body":"Acceptance",'
         '"url":"https://github.com/me/repo/issues/7",'
@@ -99,7 +104,10 @@ def _stateful_factory_repo(tmp_path: Path) -> tuple[Path, dict[str, str], Path, 
         '  *"issue edit"*"factory:running"*"factory:review"*) '
         'echo \'running->review\' >> "$LOG"; echo review > "$STATE" ;;\n'
         '  *"issue comment"*) echo \'comment\' >> "$LOG" ;;\n'
-        "  *\"pr list\"*) printf '%s' '[]' ;;\n"
+        f"  *\"pr list\"*) if [ -f '{pr_created}' ]; then "
+        'printf \'%s\' \'[{"url":"https://github.com/me/repo/pull/9",'
+        '"isDraft":true,"closingIssuesReferences":[{"number":7}]}]\'; '
+        "else printf '%s' '[]'; fi ;;\n"
         "esac\n"
     )
     pi = binary_dir / "pi"
@@ -107,6 +115,7 @@ def _stateful_factory_repo(tmp_path: Path) -> tuple[Path, dict[str, str], Path, 
         "#!/bin/sh\n"
         f"echo \"$*\" >> '{pi_log}'\n"
         f"if [ ! -f '{started}' ]; then touch '{started}'; kill -9 $PPID; exit 137; fi\n"
+        f"touch '{pr_created}'\n"
         "printf '%s' 'https://github.com/me/repo/pull/9'\n"
     )
     pi.chmod(0o755)
