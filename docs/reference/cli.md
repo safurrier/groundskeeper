@@ -16,6 +16,22 @@ index:
 
 # CLI Reference
 
+## `gk automation`
+
+`gk automation list [--json]` lists configured local automations.
+
+`gk automation tick NAME [--dry-run] [--json]` runs one bounded pass. Dry-run
+selects and reports eligible work without labels, comments, or worker launch.
+JSON output includes the automation name, status, normalized task, PR URL, and
+detail. A no-work tick exits successfully. Ticks are noninteractive and use a
+single-host advisory lock.
+
+JSON errors use `{"status":"error","error":"...","exit_code":2}`. Exit `0`
+means no work, review-ready work, or a successful dry-run. Exit `2` is a
+configuration, command, tracker, or lock error; `4` is claim contention; and
+`5` is a blocked worker. Configure schedulers with the repository containing
+`.groundskeeper/config.yml` as their working directory.
+
 ## `gk init`
 
 Initialize Groundskeeper in the current project.

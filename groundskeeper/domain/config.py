@@ -122,6 +122,45 @@ class Workflow:
         return True
 
 
+@dataclass(frozen=True)
+class GitHubIssuesSource:
+    """GitHub-specific queue configuration confined to its adapter."""
+
+    repository: str
+    repository_path: Path
+    trusted_authors: tuple[str, ...]
+    ready_label: str = "factory:ready"
+    running_label: str = "factory:running"
+    review_label: str = "factory:review"
+    blocked_label: str = "factory:blocked"
+
+
+@dataclass(frozen=True)
+class AutomationPolicy:
+    """Provider-neutral factory safety policy."""
+
+    concurrency: int = 1
+    output: str = "draft-pr"
+    merge: str = "never"
+
+
+@dataclass(frozen=True)
+class PiRunnerConfig:
+    """Configuration for the Pi execution adapter."""
+
+    type: str = "pi"
+
+
+@dataclass(frozen=True)
+class Automation:
+    """A declarative automation composed from typed provider configuration."""
+
+    name: str
+    source: GitHubIssuesSource
+    runner: PiRunnerConfig = field(default_factory=PiRunnerConfig)
+    policy: AutomationPolicy = field(default_factory=AutomationPolicy)
+
+
 def _parse_triggers(raw: dict[str, Any]) -> tuple[TriggerSpec, ...]:
     """Parse raw trigger config into typed trigger specs."""
     specs: list[TriggerSpec] = []
@@ -257,3 +296,80 @@ def get_workflow(config: dict[str, Any], name: str) -> Workflow | None:
         if wf.name == name:
             return wf
     return None
+
+
+def get_automations(config: dict[str, Any]) -> list[Automation]:
+    """Parse strict automation definitions separately from legacy workflows."""
+    raw = config.get("automations", {})
+    if raw is None:
+        return []
+    if not isinstance(raw, dict):
+        raise ConfigError("'automations' must be a mapping")
+    automations: list[Automation] = []
+    for name, value in raw.items():
+        if not isinstance(value, dict):
+            raise ConfigError(f"Automation '{name}' must be a mapping")
+        source = value.get("source")
+        runner = value.get("runner")
+        policy = value.get("policy", {})
+        if not isinstance(source, dict) or source.get("type") != "github-issues":
+            raise ConfigError(
+                f"Automation '{name}' requires source.type: github-issues"
+            )
+        if not isinstance(runner, dict) or runner.get("type") != "pi":
+            raise ConfigError(f"Automation '{name}' requires runner.type: pi")
+        if not isinstance(policy, dict):
+            raise ConfigError(f"Automation '{name}' policy must be a mapping")
+        repository = source.get("repository")
+        repository_path = source.get("repository-path")
+        authors = source.get("trusted-authors")
+        if not isinstance(repository, str) or not repository:
+            raise ConfigError(f"Automation '{name}' requires source.repository")
+        if not isinstance(repository_path, str) or not repository_path:
+            raise ConfigError(f"Automation '{name}' requires source.repository-path")
+        if (
+            not isinstance(authors, list)
+            or not authors
+            or not all(isinstance(author, str) and author for author in authors)
+        ):
+            raise ConfigError(
+                f"Automation '{name}' requires non-empty source.trusted-authors"
+            )
+        concurrency = policy.get("concurrency", 1)
+        if concurrency != 1:
+            raise ConfigError(
+                f"Automation '{name}' currently requires policy.concurrency: 1"
+            )
+        if policy.get("merge", "never") != "never":
+            raise ConfigError(f"Automation '{name}' requires policy.merge: never")
+        if policy.get("output", "draft-pr") != "draft-pr":
+            raise ConfigError(f"Automation '{name}' requires policy.output: draft-pr")
+        labels = source.get("labels", {})
+        if not isinstance(labels, dict):
+            raise ConfigError(f"Automation '{name}' source.labels must be a mapping")
+        path = Path(repository_path).expanduser()
+        if not path.is_absolute():
+            raise ConfigError(
+                f"Automation '{name}' source.repository-path must be absolute"
+            )
+        automations.append(
+            Automation(
+                name=str(name),
+                source=GitHubIssuesSource(
+                    repository=repository,
+                    repository_path=path.resolve(),
+                    trusted_authors=tuple(authors),
+                    ready_label=str(labels.get("ready", "factory:ready")),
+                    running_label=str(labels.get("running", "factory:running")),
+                    review_label=str(labels.get("review", "factory:review")),
+                    blocked_label=str(labels.get("blocked", "factory:blocked")),
+                ),
+                policy=AutomationPolicy(),
+            )
+        )
+    return automations
+
+
+def get_automation(config: dict[str, Any], name: str) -> Automation | None:
+    """Look up one automation by name."""
+    return next((item for item in get_automations(config) if item.name == name), None)

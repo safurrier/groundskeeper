@@ -1,5 +1,64 @@
 # Groundskeeper
 
+Groundskeeper has two execution paths. Declarative local automations are the
+recommended outer loop for dispatching trusted tracker tasks into an existing
+agent workflow. GitHub Actions generation remains available as the legacy CI
+path for running skills on repository events.
+
+## Local task automations
+
+The first automation source is GitHub Issues and the first runner is Pi. A tick
+claims at most one trusted, explicitly-ready issue, asks Pi to run
+`supervised-dev-cycle` in auto mode, and stops at a draft pull request for human
+review. Groundskeeper never merges.
+
+```yaml
+automations:
+  daily-dev:
+    source:
+      type: github-issues
+      repository: safurrier/dots
+      repository-path: /Users/alexfurrier/git_repositories/dots
+      trusted-authors: [safurrier]
+      labels:
+        ready: factory:ready
+        running: factory:running
+        review: factory:review
+        blocked: factory:blocked
+    runner:
+      type: pi
+    policy:
+      concurrency: 1
+      output: draft-pr
+      merge: never
+```
+
+Preview selection without changing GitHub or starting Pi:
+
+```bash
+gk automation list
+gk automation tick daily-dev --dry-run --json
+```
+
+Run one bounded pass with `gk automation tick daily-dev --json`. A successful
+no-work tick is safe, and retries cannot reclaim an issue after its ready label
+has been removed. Failed workers move the issue to `factory:blocked` with an
+actionable comment. Schedule this command with a local scheduler such as
+`launchd`; the development workflow owns worktrees, validation, CI, and PRs.
+Ticks use a host-local advisory lock and reconcile `factory:running` issues
+before selecting new work. This guarantees one worker on one scheduler host;
+running multiple scheduler hosts for the same automation is not supported.
+The lock file and `.groundskeeper/config.yml` are resolved from the command's
+working directory. A `launchd` job must set `WorkingDirectory` to the repository
+that owns this configuration.
+
+Each issue maps to a deterministic UUIDv5 Pi session and stable run name. If a
+process exits after claiming an issue, the next tick resumes that same session
+with the original task and safety contract. Successful workers print the draft
+PR URL and use `Closes #N` in its body; restart reconciliation independently
+checks GitHub's exact closing-issue references. Issue discovery requests the
+ready/running label server-side and is bounded at 1,000 open issues per state.
+
 Define AI agent skills as markdown prompt templates. Chain them into workflows. Run them locally or generate GitHub Actions workflows that run them on PRs or schedules.
 
 ## Why this exists

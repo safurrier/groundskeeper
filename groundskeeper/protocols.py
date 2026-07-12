@@ -4,6 +4,12 @@ from __future__ import annotations
 
 from typing import Protocol
 
+from groundskeeper.domain.automation import (
+    AutomationTask,
+    ClaimResult,
+    TaskState,
+    WorkResult,
+)
 from groundskeeper.domain.models import RunContext, RunResult, Skill
 
 
@@ -37,3 +43,21 @@ class CIProvider(Protocol):
 
     @property
     def workflow_directory(self) -> str: ...
+
+
+class Tracker(Protocol):
+    """Provider-neutral task ledger operations."""
+
+    def list_ready(self) -> list[AutomationTask]: ...
+    def list_running(self) -> list[AutomationTask]: ...
+    def claim(self, task: AutomationTask) -> ClaimResult: ...
+    def transition(
+        self, task: AutomationTask, state: TaskState, detail: str = ""
+    ) -> None: ...
+    def find_pull_request(self, task: AutomationTask) -> str | None: ...
+
+
+class AutomationRunner(Protocol):
+    """Executes a normalized automation task."""
+
+    def run(self, task: AutomationTask, recovery: bool = False) -> WorkResult: ...

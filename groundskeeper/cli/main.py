@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import shutil
+from dataclasses import asdict
 from pathlib import Path
 
 import click
@@ -11,11 +13,19 @@ from groundskeeper.adapters import list_all_skills, resolve_skill
 from groundskeeper.adapters.builtin_store import BuiltinSkillStore
 from groundskeeper.adapters.claude_code import ClaudeCodeRunner
 from groundskeeper.adapters.dry_run import DryRunRunner
+from groundskeeper.adapters.gh import GhClient
 from groundskeeper.adapters.github_actions import GitHubActionsProvider
+from groundskeeper.adapters.github_issues import GitHubIssuesTracker
 from groundskeeper.adapters.local_store import LocalSkillStore
+from groundskeeper.adapters.pi import PiAutomationRunner, PiClient
+from groundskeeper.adapters.process import ProcessClient
+from groundskeeper.adapters.tick_lock import TickLock
+from groundskeeper.automation import AutomationService
 from groundskeeper.domain.config import (
     ParallelGroup,
     SkillRef,
+    get_automation,
+    get_automations,
     get_workflow,
     get_workflows,
     load_config,
@@ -74,6 +84,117 @@ def cli(ctx: click.Context, skill_path: tuple[str, ...]) -> None:
     """
     ctx.ensure_object(dict)
     ctx.obj["extra_skill_paths"] = skill_path
+
+
+@cli.group(
+    epilog="""
+\b
+Examples:
+  gk automation list
+  gk automation tick daily-dev --dry-run --json
+""",
+)
+def automation() -> None:
+    """List and execute declarative local automations."""
+
+
+@automation.command("list")
+@click.option("--json", "json_output", is_flag=True, help="Emit JSON output.")
+def automation_list(json_output: bool) -> None:
+    """List automations from .groundskeeper/config.yml."""
+    try:
+        items = get_automations(load_config(Path(".groundskeeper/config.yml")))
+    except ConfigError as e:
+        if json_output:
+            click.echo(json.dumps({"status": "error", "error": str(e), "exit_code": 2}))
+            raise SystemExit(2) from e
+        raise click.ClickException(str(e)) from e
+    if json_output:
+        click.echo(
+            json.dumps(
+                [
+                    {
+                        "name": item.name,
+                        "repository": item.source.repository,
+                        "runner": item.runner.type,
+                        "concurrency": item.policy.concurrency,
+                    }
+                    for item in items
+                ]
+            )
+        )
+        return
+    if not items:
+        click.echo("No automations configured.")
+        return
+    for item in items:
+        click.echo(f"  {item.name:<24} {item.source.repository} [{item.runner.type}]")
+
+
+@automation.command("tick")
+@click.argument("name")
+@click.option("--dry-run", is_flag=True, help="Preview selection without mutation.")
+@click.option("--json", "json_output", is_flag=True, help="Emit JSON output.")
+def automation_tick(name: str, dry_run: bool, json_output: bool) -> None:
+    """Run one bounded reconciliation pass for NAME."""
+    try:
+        config = load_config(Path(".groundskeeper/config.yml"))
+        definition = get_automation(config, name)
+    except ConfigError as e:
+        if json_output:
+            click.echo(json.dumps({"status": "error", "error": str(e), "exit_code": 2}))
+            raise SystemExit(2) from e
+        raise click.ClickException(str(e)) from e
+    if definition is None:
+        if json_output:
+            click.echo(
+                json.dumps(
+                    {
+                        "status": "error",
+                        "error": f"Automation not found: {name}",
+                        "exit_code": 2,
+                    }
+                )
+            )
+            raise SystemExit(2)
+        raise click.ClickException(
+            f"Automation not found: {name}. Run 'gk automation list'."
+        )
+    process = ProcessClient()
+    tracker = GitHubIssuesTracker(GhClient(process, Path.cwd()), definition.source)
+    runner = PiAutomationRunner(
+        PiClient(process),
+        {definition.source.repository: definition.source.repository_path},
+    )
+    try:
+        lock_path = Path(".groundskeeper/.locks") / f"{name}.lock"
+        with TickLock(lock_path):
+            result = AutomationService(tracker, runner).tick(
+                definition, dry_run=dry_run
+            )
+    except RuntimeError as e:
+        if json_output:
+            click.echo(json.dumps({"status": "error", "error": str(e), "exit_code": 2}))
+            raise SystemExit(2) from e
+        raise click.ClickException(str(e)) from e
+    payload = asdict(result)
+    if json_output:
+        click.echo(json.dumps(payload))
+    else:
+        click.echo(
+            f"{result.status}: {result.detail or result.pull_request_url or ''}".rstrip()
+        )
+    exit_code = {
+        "no-work": 0,
+        "review": 0,
+        "would-dispatch": 0,
+        "would-resume": 0,
+        "running": 3,
+        "not-claimed": 4,
+        "blocked": 5,
+    }.get(result.status, 2)
+    if exit_code:
+        raise SystemExit(exit_code)
 
 
 @cli.command(

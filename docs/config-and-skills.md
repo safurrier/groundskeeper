@@ -13,6 +13,17 @@ index:
 
 # Config & Skills Deep Reference
 
+## Local automations
+
+`automations:` is separate from `workflows:`. Workflows describe skill chains
+and the legacy GitHub Actions generation path; automations select trusted work
+from a tracker and dispatch it to an existing local development workflow.
+
+The initial provider pair is `source.type: github-issues` and `runner.type: pi`.
+Each source requires `repository`, `repository-path`, and at least one
+`trusted-author`. Safety policy is strict: concurrency is `1`, output is
+`draft-pr`, and merge is `never`. See the README for a complete configuration.
+
 ## .groundskeeper/config.yml
 
 The config file defines workflows — named chains of skills that run in CI or locally.
