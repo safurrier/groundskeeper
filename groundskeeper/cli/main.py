@@ -2,20 +2,36 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 import shutil
 from pathlib import Path
 
 import click
 
 from groundskeeper.adapters import list_all_skills, resolve_skill
+from groundskeeper.adapters.automation_runner import (
+    AutomationSkillRenderer,
+    PiAutomationRunner,
+)
 from groundskeeper.adapters.builtin_store import BuiltinSkillStore
 from groundskeeper.adapters.claude_code import ClaudeCodeRunner
 from groundskeeper.adapters.dry_run import DryRunRunner
+from groundskeeper.adapters.gh import GhClient
 from groundskeeper.adapters.github_actions import GitHubActionsProvider
+from groundskeeper.adapters.github_issues import GitHubIssuesTracker
 from groundskeeper.adapters.local_store import LocalSkillStore
+from groundskeeper.adapters.pi import PiClient
+from groundskeeper.adapters.process import ProcessClient
+from groundskeeper.adapters.tick_lock import TickLock
+from groundskeeper.automation import AutomationService
 from groundskeeper.domain.config import (
+    Automation,
     ParallelGroup,
     SkillRef,
+    get_automation,
+    get_automations,
     get_workflow,
     get_workflows,
     load_config,
@@ -25,8 +41,9 @@ from groundskeeper.domain.errors import (
     SkillNotFoundError,
     SkillValidationError,
 )
-from groundskeeper.domain.models import RunContext, RunResult
+from groundskeeper.domain.models import RunContext, RunResult, Skill
 from groundskeeper.domain.parser import parse_skill_file
+from groundskeeper.protocols import SkillStore
 
 
 def _get_stores(
@@ -74,6 +91,390 @@ def cli(ctx: click.Context, skill_path: tuple[str, ...]) -> None:
     """
     ctx.ensure_object(dict)
     ctx.obj["extra_skill_paths"] = skill_path
+
+
+JSON_VERSION = 1
+
+
+class AutomationCommandError(click.ClickException):
+    """An automation preflight error with a stable scheduler-facing exit code."""
+
+    exit_code = 2
+
+
+@cli.group(
+    epilog="""
+\b
+Examples:
+  gk automation list
+  gk automation show daily-dev
+  gk automation validate daily-dev --json
+  gk automation tick daily-dev --dry-run --json
+""",
+)
+@click.option(
+    "--config",
+    "config_path",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=Path(".groundskeeper/config.yml"),
+    show_default=True,
+    help="Automation configuration file.",
+)
+@click.pass_context
+def automation(ctx: click.Context, config_path: Path) -> None:
+    """Inspect, validate, and run declarative local automations."""
+    ctx.ensure_object(dict)
+    ctx.obj["automation_config"] = config_path
+
+
+def _automation_config_path(ctx: click.Context) -> Path:
+    """Read the automation config selected at the command group."""
+    return ctx.obj["automation_config"]
+
+
+def _automation_stores(
+    config_path: Path, extra_skill_paths: tuple[str, ...]
+) -> list[SkillStore]:
+    """Resolve automation skills relative to their config file."""
+    stores: list[SkillStore] = []
+    local_dir = config_path.parent / "skills"
+    if local_dir.is_dir():
+        stores.append(LocalSkillStore(local_dir))
+    for skill_path in extra_skill_paths:
+        stores.append(LocalSkillStore(Path(skill_path), source_kind="external"))
+    stores.append(BuiltinSkillStore())
+    return stores
+
+
+def _automation_summary(
+    item: Automation, skill: Skill | None = None
+) -> dict[str, object]:
+    """Return a stable, compact automation description."""
+    summary: dict[str, object] = {
+        "name": item.name,
+        "repository": item.source.repository,
+        "repository_path": str(item.source.repository_path),
+        "labels": {
+            "ready": item.source.ready_label,
+            "running": item.source.running_label,
+            "review": item.source.review_label,
+            "blocked": item.source.blocked_label,
+        },
+        "runner": {
+            "type": item.runner.type,
+            "skill": item.runner.skill,
+            "approval": item.runner.approval,
+            "session": item.runner.session,
+            "timeout_seconds": item.runner.timeout_seconds,
+        },
+        "policy": {
+            "concurrency": item.policy.concurrency,
+            "output": item.policy.output,
+            "merge": item.policy.merge,
+        },
+    }
+    if skill is not None:
+        summary["skill"] = {
+            "name": skill.name,
+            "source_kind": skill.source.kind,
+            "path": str(skill.source.path),
+        }
+    return summary
+
+
+def _automation_envelope(
+    status: str, data: dict[str, object], exit_code: int = 0
+) -> str:
+    """Serialize the versioned JSON contract shared by automation commands."""
+    return json.dumps(
+        {
+            "version": JSON_VERSION,
+            "status": status,
+            "data": data,
+            "exit_code": exit_code,
+        }
+    )
+
+
+def _automation_error(message: str, json_output: bool) -> None:
+    """Print an actionable automation error and exit consistently."""
+    if json_output:
+        click.echo(_automation_envelope("error", {"error": message}, exit_code=2))
+        raise SystemExit(2)
+    raise AutomationCommandError(message)
+
+
+def _load_automation(config_path: Path, name: str) -> Automation:
+    """Load one strict automation definition or raise an actionable config error."""
+    definition = get_automation(load_config(config_path), name)
+    if definition is None:
+        raise ConfigError(f"Automation not found: {name}. Run 'gk automation list'.")
+    return definition
+
+
+def _automation_state_root() -> Path:
+    """Return the host-local state root, with a narrow test/host override."""
+    configured_root = os.environ.get("GROUNDSKEEPER_STATE_HOME")
+    if configured_root:
+        return Path(configured_root).expanduser() / "groundskeeper"
+    xdg_state_home = os.environ.get("XDG_STATE_HOME")
+    if xdg_state_home:
+        return Path(xdg_state_home).expanduser() / "groundskeeper"
+    return Path.home() / ".local" / "state" / "groundskeeper"
+
+
+def _automation_lock_path(definition: Automation) -> Path:
+    """Return a stable host-local lock shared by one normalized repository."""
+    repository_identity = definition.source.repository.strip().casefold()
+    repository_key = hashlib.sha256(repository_identity.encode("utf-8")).hexdigest()[
+        :16
+    ]
+    return _automation_state_root() / "locks" / f"repository-{repository_key}.lock"
+
+
+def _resolve_automation_skill(
+    definition: Automation, config_path: Path, extra_skill_paths: tuple[str, ...]
+) -> Skill:
+    """Resolve the configured skill before a tick can claim external work."""
+    skill = resolve_skill(
+        definition.runner.skill, _automation_stores(config_path, extra_skill_paths)
+    )
+    if skill is None:
+        raise ConfigError(
+            f"Automation '{definition.name}' cannot resolve runner.skill "
+            f"'{definition.runner.skill}'. Add it under {config_path.parent / 'skills'} "
+            "or pass --skill-path."
+        )
+    return skill
+
+
+def _build_automation_runner(
+    definition: Automation,
+    config_path: Path,
+    extra_skill_paths: tuple[str, ...],
+    process: ProcessClient,
+    require_available: bool = True,
+    skill: Skill | None = None,
+) -> PiAutomationRunner:
+    """Construct the one supported typed automation runner after preflight checks."""
+    repository_path = definition.source.repository_path
+    if not repository_path.is_dir():
+        raise ConfigError(
+            f"Automation '{definition.name}' repository path does not exist: "
+            f"{repository_path}"
+        )
+    resolved_skill = skill or _resolve_automation_skill(
+        definition, config_path, extra_skill_paths
+    )
+    client = PiClient(process)
+    if require_available and not client.is_available():
+        raise ConfigError(
+            "Pi CLI not found. Install Pi and retry 'gk automation validate'."
+        )
+    return PiAutomationRunner(
+        client,
+        repository_path,
+        AutomationSkillRenderer(resolved_skill, definition.policy),
+        definition.runner,
+    )
+
+
+@automation.command(
+    "list",
+    epilog="""
+\b
+Examples:
+  gk automation list --json
+  gk automation --config /srv/widgets/.groundskeeper/config.yml list --json
+
+Exit codes: 0 listed successfully, 2 invalid configuration.
+""",
+)
+@click.option("--json", "json_output", is_flag=True, help="Emit versioned JSON output.")
+@click.pass_context
+def automation_list(ctx: click.Context, json_output: bool) -> None:
+    """List configured automations without contacting external services.
+
+    Use when choosing an automation name. Don't use for one automation's
+    resolved settings; use `gk automation show NAME` instead.
+    """
+    try:
+        items = get_automations(load_config(_automation_config_path(ctx)))
+    except ConfigError as error:
+        _automation_error(str(error), json_output)
+        return
+    summaries = [_automation_summary(item) for item in items]
+    if json_output:
+        click.echo(_automation_envelope("ok", {"automations": summaries}))
+        return
+    if not summaries:
+        click.echo("No automations configured.")
+        return
+    for item in items:
+        click.echo(f"  {item.name:<24} {item.source.repository} [{item.runner.skill}]")
+
+
+@automation.command(
+    "show",
+    epilog="""
+\b
+Examples:
+  gk automation show daily-dev --json
+  gk automation --config /srv/widgets/.groundskeeper/config.yml show daily-dev
+
+Exit codes: 0 found, 2 invalid configuration or unknown automation.
+""",
+)
+@click.argument("name")
+@click.option("--json", "json_output", is_flag=True, help="Emit versioned JSON output.")
+@click.pass_context
+def automation_show(ctx: click.Context, name: str, json_output: bool) -> None:
+    """Show one automation's resolved source, skill, runner, and safety policy.
+
+    Use when inspecting one automation. Don't use to check executable and path
+    readiness; use `gk automation validate NAME` instead.
+    """
+    config_path = _automation_config_path(ctx)
+    extra = ctx.obj.get("extra_skill_paths", ()) if ctx.obj else ()
+    try:
+        definition = _load_automation(config_path, name)
+        skill = _resolve_automation_skill(definition, config_path, extra)
+    except ConfigError as error:
+        _automation_error(str(error), json_output)
+        return
+    summary = _automation_summary(definition, skill)
+    if json_output:
+        click.echo(_automation_envelope("ok", {"automation": summary}))
+        return
+    click.echo(json.dumps(summary, indent=2))
+
+
+@automation.command(
+    "validate",
+    epilog="""
+\b
+Examples:
+  gk automation validate daily-dev --json
+  gk automation --config /srv/widgets/.groundskeeper/config.yml validate
+
+Exit codes: 0 valid, 2 invalid configuration, unresolved skill, missing Pi, or missing repository.
+""",
+)
+@click.argument("name", required=False)
+@click.option("--json", "json_output", is_flag=True, help="Emit versioned JSON output.")
+@click.pass_context
+def automation_validate(
+    ctx: click.Context, name: str | None, json_output: bool
+) -> None:
+    """Validate config, skill resolution, Pi availability, and local repository paths.
+
+    Use when changing configuration or before scheduling a tick. Don't use to
+    select work; use `gk automation tick NAME --dry-run` instead. This command
+    never claims issues, changes labels, or starts a worker.
+    """
+    config_path = _automation_config_path(ctx)
+    extra = ctx.obj.get("extra_skill_paths", ()) if ctx.obj else ()
+    try:
+        items = get_automations(load_config(config_path))
+        if name:
+            items = [item for item in items if item.name == name]
+            if not items:
+                raise ConfigError(
+                    f"Automation not found: {name}. Run 'gk automation list'."
+                )
+        summaries: list[dict[str, object]] = []
+        for item in items:
+            skill = _resolve_automation_skill(item, config_path, extra)
+            _build_automation_runner(
+                item, config_path, extra, ProcessClient(), skill=skill
+            )
+            summaries.append(_automation_summary(item, skill))
+    except ConfigError as error:
+        _automation_error(str(error), json_output)
+        return
+    data = {"automations": summaries}
+    if json_output:
+        click.echo(_automation_envelope("ok", data))
+        return
+    click.echo(f"Validated {len(items)} automation(s) without GitHub mutation.")
+
+
+@automation.command(
+    "tick",
+    epilog="""
+\b
+Examples:
+  gk automation tick daily-dev --dry-run --json
+  gk automation tick daily-dev --json
+
+Exit codes: 0 complete/no work, 2 configuration or runner error,
+4 claim contention, 5 blocked worker.
+""",
+)
+@click.argument("name")
+@click.option("--dry-run", is_flag=True, help="Preview selection without mutation.")
+@click.option("--json", "json_output", is_flag=True, help="Emit versioned JSON output.")
+@click.pass_context
+def automation_tick(
+    ctx: click.Context, name: str, dry_run: bool, json_output: bool
+) -> None:
+    """Run one bounded reconciliation pass for NAME.
+
+    Use when dispatching or reconciling work. Don't use to inspect configuration;
+    use `gk automation show` or `validate` first. Dry-run omits issue bodies
+    from output and never changes GitHub state or starts Pi.
+    """
+    config_path = _automation_config_path(ctx)
+    extra = ctx.obj.get("extra_skill_paths", ()) if ctx.obj else ()
+    try:
+        definition = _load_automation(config_path, name)
+        process = ProcessClient()
+        runner = _build_automation_runner(
+            definition, config_path, extra, process, require_available=not dry_run
+        )
+        tracker = GitHubIssuesTracker(
+            GhClient(process, definition.source.repository_path), definition.source
+        )
+        lock_path = _automation_lock_path(definition)
+        with TickLock(lock_path):
+            result = AutomationService(tracker, runner).tick(
+                definition, dry_run=dry_run
+            )
+    except (ConfigError, RuntimeError) as error:
+        _automation_error(str(error), json_output)
+        return
+
+    task_data = None
+    if result.task is not None:
+        task_data = {
+            "id": result.task.external_id,
+            "title": result.task.title,
+            "url": result.task.url,
+            "repository": result.task.target_repository,
+            "state": result.task.state.value,
+        }
+    data: dict[str, object] = {
+        "automation": result.automation,
+        "task": task_data,
+        "pull_request_url": result.pull_request_url,
+        "detail": result.detail,
+    }
+    exit_code = {
+        "no-work": 0,
+        "review": 0,
+        "would-dispatch": 0,
+        "would-resume": 0,
+        "not-claimed": 4,
+        "blocked": 5,
+    }.get(result.status, 2)
+    if json_output:
+        click.echo(_automation_envelope(result.status, data, exit_code))
+    else:
+        click.echo(
+            f"{result.status}: {result.detail or result.pull_request_url or ''}".rstrip()
+        )
+    if exit_code:
+        raise SystemExit(exit_code)
 
 
 @cli.command(

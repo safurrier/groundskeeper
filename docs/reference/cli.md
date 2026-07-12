@@ -16,6 +16,40 @@ index:
 
 # CLI Reference
 
+## `gk automation`
+
+Automation commands use `.groundskeeper/config.yml` by default. Use
+`gk automation --config PATH ...` to select a different file.
+
+```bash
+gk automation list [--json]
+gk automation show NAME [--json]
+gk automation validate [NAME] [--json]
+gk automation tick NAME [--dry-run] [--json]
+```
+
+`list` and `show` inspect configured local automations. `show --json` includes
+the resolved repository path, lifecycle labels, runner settings, policy, and
+selected-skill provenance (name, source kind, and path, never the prompt body).
+`validate --json` returns the same resolved skill provenance after checking it.
+`validate` checks strict config, named-skill resolution, Pi availability, the
+repository path, and the fixed draft-only/never-merge policy without contacting
+GitHub or starting work. `tick` runs one bounded reconciliation pass. Dry-run
+selects and reports eligible work without labels, comments, or worker launch.
+Its compact output omits issue bodies.
+
+Pi runner configuration accepts optional `timeout-seconds` (default: 7,200) for
+long-running tasks. GitHub CLI calls use a fixed 30-second timeout. Groundskeeper
+does not sandbox a user-authorized Pi process; it enforces its accepted-result
+postcondition by transitioning to review only for an open draft pull request
+with the exact closing reference.
+
+All JSON responses use a versioned envelope:
+`{"version":1,"status":"...","data":{...},"exit_code":N}`. Exit `0` means
+no work, review-ready work, or a successful dry-run. Exit `2` is a configuration,
+command, tracker, or lock error; `4` is claim contention; and `5` is a blocked
+worker. Commands are noninteractive and ticks use a single-host advisory lock.
+
 ## `gk init`
 
 Initialize Groundskeeper in the current project.

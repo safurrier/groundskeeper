@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -9,6 +10,221 @@ from pathlib import Path
 import yaml
 
 from .conftest import requires_claude, requires_gk
+
+
+def _factory_repo(tmp_path: Path, gh_output: str) -> tuple[Path, dict[str, str]]:
+    repo = tmp_path / "factory"
+    (repo / ".groundskeeper").mkdir(parents=True)
+    (repo / ".groundskeeper/skills/issue-implementation").mkdir(parents=True)
+    (repo / ".groundskeeper/skills/issue-implementation/SKILL.md").write_text(
+        "---\nname: issue-implementation\ndescription: Implement one issue\n---\n\nImplement it."
+    )
+    (repo / ".groundskeeper/config.yml").write_text(
+        f"""automations:
+  daily:
+    source:
+      type: github-issues
+      repository: me/repo
+      repository-path: {repo}
+      trusted-authors: [alex]
+    runner:
+      type: pi
+      skill: issue-implementation
+      approval: allow
+      session: deterministic
+    policy:
+      concurrency: 1
+      output: draft-pr
+      merge: never
+"""
+    )
+    binary_dir = tmp_path / "bin"
+    binary_dir.mkdir()
+    gh = binary_dir / "gh"
+    gh.write_text(f"#!/bin/sh\nprintf '%s' '{gh_output}'\n")
+    gh.chmod(0o755)
+    env = dict(os.environ)
+    env["PATH"] = f"{binary_dir}:{env['PATH']}"
+    return repo, env
+
+
+def _factory_flow_repo(
+    tmp_path: Path, state: str, pi_success: bool = True, draft: bool = True
+) -> tuple[Path, dict[str, str]]:
+    repo, env = _factory_repo(tmp_path, "[]")
+    binary_dir = tmp_path / "bin"
+    pr_created = tmp_path / "pr-created"
+    issue = (
+        '[{"number":7,"title":"Do work","body":"Acceptance",'
+        '"url":"https://github.com/me/repo/issues/7",'
+        '"author":{"login":"alex"},"labels":[{"name":"factory:' + state + '"}]}]'
+    )
+    draft_json = "true" if draft else "false"
+    (binary_dir / "gh").write_text(
+        "#!/bin/sh\n"
+        'case "$*" in\n'
+        f"  *\"issue list\"*\"factory:{state}\"*) printf '%s' '{issue}' ;;\n"
+        "  *\"issue list\"*) printf '%s' '[]' ;;\n"
+        f"  *\"pr list\"*) if [ -f '{pr_created}' ]; then "
+        'printf \'%s\' \'[{"url":"https://github.com/me/repo/pull/9",'
+        f'"isDraft":{draft_json},"closingIssuesReferences":[{{"number":7}}]}}]\'; '
+        "else printf '%s' '[]'; fi ;;\n"
+        "  *) printf '%s' '' ;;\n"
+        "esac\n"
+    )
+    pi = binary_dir / "pi"
+    pi.write_text(
+        "#!/bin/sh\n"
+        + (
+            f"touch '{pr_created}'\nprintf '%s' 'https://github.com/me/repo/pull/9'\n"
+            if pi_success
+            else "echo 'worker failed' >&2\nexit 1\n"
+        )
+    )
+    pi.chmod(0o755)
+    return repo, env
+
+
+def _stateful_factory_repo(tmp_path: Path) -> tuple[Path, dict[str, str], Path, Path]:
+    repo, env = _factory_repo(tmp_path, "[]")
+    binary_dir = tmp_path / "bin"
+    state = tmp_path / "issue-state"
+    state.write_text("ready")
+    gh_log = tmp_path / "gh.log"
+    pi_log = tmp_path / "pi.log"
+    started = tmp_path / "pi-started"
+    pr_created = tmp_path / "pr-created"
+    issue_prefix = (
+        '[{"number":7,"title":"Do work","body":"Acceptance",'
+        '"url":"https://github.com/me/repo/issues/7",'
+        '"author":{"login":"alex"},"labels":[{"name":"factory:'
+    )
+    (binary_dir / "gh").write_text(
+        "#!/bin/sh\n"
+        f"STATE='{state}'\nLOG='{gh_log}'\nCURRENT=$(cat \"$STATE\")\n"
+        'case "$*" in\n'
+        '  *"issue list"*)\n'
+        '    case "$*" in *"factory:$CURRENT"*) '
+        f"printf '%s%s%s' '{issue_prefix}' \"$CURRENT\" '" + "\"}]}]' ;; "
+        "*) printf '%s' '[]' ;; esac ;;\n"
+        '  *"issue edit"*"factory:ready"*"factory:running"*) '
+        'echo \'ready->running\' >> "$LOG"; echo running > "$STATE" ;;\n'
+        '  *"issue edit"*"factory:running"*"factory:review"*) '
+        'echo \'running->review\' >> "$LOG"; echo review > "$STATE" ;;\n'
+        '  *"issue comment"*) echo \'comment\' >> "$LOG" ;;\n'
+        f"  *\"pr list\"*) if [ -f '{pr_created}' ]; then "
+        'printf \'%s\' \'[{"url":"https://github.com/me/repo/pull/9",'
+        '"isDraft":true,"closingIssuesReferences":[{"number":7}]}]\'; '
+        "else printf '%s' '[]'; fi ;;\n"
+        "esac\n"
+    )
+    pi = binary_dir / "pi"
+    pi.write_text(
+        "#!/bin/sh\n"
+        f"echo \"$*\" >> '{pi_log}'\n"
+        f"if [ ! -f '{started}' ]; then touch '{started}'; kill -9 $PPID; exit 137; fi\n"
+        f"touch '{pr_created}'\n"
+        "printf '%s' 'https://github.com/me/repo/pull/9'\n"
+    )
+    pi.chmod(0o755)
+    return repo, env, gh_log, pi_log
+
+
+@requires_gk
+class TestAutomationE2E:
+    def test_list_show_and_validate_through_real_process(self, tmp_path: Path) -> None:
+        repo, env = _factory_repo(tmp_path, "[]")
+        listed = run_gk("automation", "list", "--json", cwd=repo, env=env)
+        shown = run_gk("automation", "show", "daily", "--json", cwd=repo, env=env)
+        validated = run_gk(
+            "automation", "validate", "daily", "--json", cwd=repo, env=env
+        )
+        assert listed.returncode == shown.returncode == validated.returncode == 0
+        assert json.loads(listed.stdout)["data"]["automations"][0]["name"] == "daily"
+        assert (
+            json.loads(shown.stdout)["data"]["automation"]["runner"]["skill"]
+            == "issue-implementation"
+        )
+        assert json.loads(validated.stdout)["version"] == 1
+
+    def test_dry_run_is_compact_and_does_not_launch_pi(self, tmp_path: Path) -> None:
+        repo, env = _factory_flow_repo(tmp_path, "ready")
+        result = run_gk(
+            "automation", "tick", "daily", "--dry-run", "--json", cwd=repo, env=env
+        )
+        assert result.returncode == 0
+        assert json.loads(result.stdout)["status"] == "would-dispatch"
+        assert "Acceptance" not in result.stdout
+
+    def test_no_work_json_through_real_process(self, tmp_path: Path) -> None:
+        repo, env = _factory_repo(tmp_path, "[]")
+        result = run_gk("automation", "tick", "daily", "--json", cwd=repo, env=env)
+        assert result.returncode == 0
+        payload = json.loads(result.stdout)
+        assert payload["status"] == "no-work"
+        assert payload["version"] == 1
+
+    def test_malformed_gh_json_is_structured_error(self, tmp_path: Path) -> None:
+        repo, env = _factory_repo(tmp_path, "not-json")
+        result = run_gk("automation", "tick", "daily", "--json", cwd=repo, env=env)
+        assert result.returncode == 2
+        payload = json.loads(result.stdout)
+        assert payload["status"] == "error"
+
+    def test_success_dispatches_and_returns_pr(self, tmp_path: Path) -> None:
+        repo, env = _factory_flow_repo(tmp_path, "ready")
+        result = run_gk("automation", "tick", "daily", "--json", cwd=repo, env=env)
+        assert result.returncode == 0
+        payload = json.loads(result.stdout)
+        assert payload["status"] == "review"
+        assert (
+            payload["data"]["pull_request_url"] == "https://github.com/me/repo/pull/9"
+        )
+
+    def test_non_draft_closing_pr_is_blocked_as_policy_violation(
+        self, tmp_path: Path
+    ) -> None:
+        repo, env = _factory_flow_repo(tmp_path, "ready", draft=False)
+        result = run_gk("automation", "tick", "daily", "--json", cwd=repo, env=env)
+        assert result.returncode == 5
+        assert "not a draft" in json.loads(result.stdout)["data"]["detail"]
+
+    def test_worker_failure_is_blocked(self, tmp_path: Path) -> None:
+        repo, env = _factory_flow_repo(tmp_path, "ready", pi_success=False)
+        result = run_gk("automation", "tick", "daily", "--json", cwd=repo, env=env)
+        assert result.returncode == 5
+        assert json.loads(result.stdout)["status"] == "blocked"
+
+    def test_running_issue_resumes_to_review(self, tmp_path: Path) -> None:
+        repo, env = _factory_flow_repo(tmp_path, "running")
+        result = run_gk("automation", "tick", "daily", "--json", cwd=repo, env=env)
+        assert result.returncode == 0
+        assert json.loads(result.stdout)["status"] == "review"
+
+    def test_crash_after_claim_resumes_same_session_without_second_claim(
+        self, tmp_path: Path
+    ) -> None:
+        repo, env, gh_log, pi_log = _stateful_factory_repo(tmp_path)
+        first = run_gk("automation", "tick", "daily", "--json", cwd=repo, env=env)
+        assert first.returncode < 0
+
+        second = run_gk("automation", "tick", "daily", "--json", cwd=repo, env=env)
+        assert second.returncode == 0
+        assert json.loads(second.stdout)["data"]["pull_request_url"].endswith("/pull/9")
+
+        mutations = gh_log.read_text().splitlines()
+        assert mutations == ["ready->running", "running->review", "comment"]
+        pi_log_text = pi_log.read_text()
+        pi_calls = [
+            line
+            for line in pi_log_text.splitlines()
+            if line.startswith("--session-id ")
+        ]
+        assert len(pi_calls) == 2
+        first_session = pi_calls[0].split("--session-id ", 1)[1].split()[0]
+        second_session = pi_calls[1].split("--session-id ", 1)[1].split()[0]
+        assert first_session == second_session
+        assert "RECOVERY_CONTEXT: Resume the deterministic session" in pi_log_text
 
 
 def run_gk(

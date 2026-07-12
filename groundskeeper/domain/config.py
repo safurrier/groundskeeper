@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, cast
 
 import yaml
 
@@ -19,6 +21,8 @@ from groundskeeper.domain.triggers import (
 
 # Tools that can modify the working directory.
 WRITE_TOOLS = frozenset({"Write", "Edit", "Bash", "NotebookEdit"})
+_AUTOMATION_NAME_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
+DEFAULT_PI_TIMEOUT_SECONDS = 7200
 
 
 @dataclass(frozen=True)
@@ -120,6 +124,49 @@ class Workflow:
             if set(tools) & WRITE_TOOLS:
                 return False
         return True
+
+
+@dataclass(frozen=True)
+class GitHubIssuesSource:
+    """GitHub-specific queue configuration confined to its adapter."""
+
+    repository: str
+    repository_path: Path
+    trusted_authors: tuple[str, ...]
+    ready_label: str = "factory:ready"
+    running_label: str = "factory:running"
+    review_label: str = "factory:review"
+    blocked_label: str = "factory:blocked"
+
+
+@dataclass(frozen=True)
+class AutomationPolicy:
+    """Provider-neutral factory safety policy."""
+
+    concurrency: int = 1
+    output: str = "draft-pr"
+    merge: str = "never"
+
+
+@dataclass(frozen=True)
+class PiRunnerConfig:
+    """Typed, deterministic configuration for the Pi execution adapter."""
+
+    skill: str
+    type: Literal["pi"] = "pi"
+    approval: Literal["allow"] = "allow"
+    session: Literal["deterministic"] = "deterministic"
+    timeout_seconds: int = DEFAULT_PI_TIMEOUT_SECONDS
+
+
+@dataclass(frozen=True)
+class Automation:
+    """A declarative automation composed from typed provider configuration."""
+
+    name: str
+    source: GitHubIssuesSource
+    runner: PiRunnerConfig
+    policy: AutomationPolicy = field(default_factory=AutomationPolicy)
 
 
 def _parse_triggers(raw: dict[str, Any]) -> tuple[TriggerSpec, ...]:
@@ -257,3 +304,178 @@ def get_workflow(config: dict[str, Any], name: str) -> Workflow | None:
         if wf.name == name:
             return wf
     return None
+
+
+def _reject_unknown_automation_keys(
+    values: Mapping[str, object],
+    allowed: set[str],
+    field_path: str,
+    corrections: dict[str, str] | None = None,
+) -> None:
+    """Reject typos at the strict automation ingress boundary."""
+    unknown = sorted(set(values) - allowed)
+    if not unknown:
+        return
+    key = unknown[0]
+    correction = (corrections or {}).get(key)
+    suggestion = f" Use '{correction}'." if correction else ""
+    raise ConfigError(f"{field_path} has unknown key '{key}'.{suggestion}")
+
+
+def _automation_mapping(value: object, field_path: str) -> dict[str, object]:
+    """Narrow one raw automation mapping without leaking an untyped config blob."""
+    if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
+        raise ConfigError(f"{field_path} must be a mapping with string keys")
+    return cast(dict[str, object], value)
+
+
+def get_automations(config: Mapping[str, object]) -> list[Automation]:
+    """Parse strict automation definitions separately from legacy workflows."""
+    _reject_unknown_automation_keys(
+        config,
+        {"version", "runner", "ci", "workflows", "automations"},
+        "config",
+        {
+            "automation": "automations",
+            "automtion": "automations",
+            "automationz": "automations",
+        },
+    )
+    raw_value = config.get("automations", {})
+    if raw_value is None:
+        return []
+    raw = _automation_mapping(raw_value, "automations")
+    automations: list[Automation] = []
+    for name, value in raw.items():
+        if not isinstance(name, str) or not _AUTOMATION_NAME_RE.match(name):
+            raise ConfigError("Automation names must be kebab-case")
+        entry_path = f"automations.{name}"
+        value = _automation_mapping(value, entry_path)
+        _reject_unknown_automation_keys(
+            value, {"source", "runner", "policy"}, entry_path
+        )
+        source = value.get("source")
+        runner = value.get("runner")
+        policy = value.get("policy", {})
+        if not isinstance(source, dict):
+            raise ConfigError(
+                f"Automation '{name}' requires source.type: github-issues"
+            )
+        source = _automation_mapping(source, f"{entry_path}.source")
+        if source.get("type") != "github-issues":
+            raise ConfigError(
+                f"Automation '{name}' requires source.type: github-issues"
+            )
+        _reject_unknown_automation_keys(
+            source,
+            {"type", "repository", "repository-path", "trusted-authors", "labels"},
+            f"{entry_path}.source",
+        )
+        if not isinstance(runner, dict):
+            raise ConfigError(f"Automation '{name}' requires runner.type: pi")
+        runner = _automation_mapping(runner, f"{entry_path}.runner")
+        if runner.get("type") != "pi":
+            raise ConfigError(f"Automation '{name}' requires runner.type: pi")
+        _reject_unknown_automation_keys(
+            runner,
+            {"type", "skill", "approval", "session", "timeout-seconds"},
+            f"{entry_path}.runner",
+            {"timeout_seconds": "timeout-seconds"},
+        )
+        skill = runner.get("skill")
+        if not isinstance(skill, str) or not skill:
+            raise ConfigError(f"Automation '{name}' requires runner.skill")
+        if runner.get("approval") != "allow":
+            raise ConfigError(f"Automation '{name}' requires runner.approval: allow")
+        if runner.get("session") != "deterministic":
+            raise ConfigError(
+                f"Automation '{name}' requires runner.session: deterministic"
+            )
+        timeout_seconds = runner.get("timeout-seconds", DEFAULT_PI_TIMEOUT_SECONDS)
+        if (
+            not isinstance(timeout_seconds, int)
+            or isinstance(timeout_seconds, bool)
+            or timeout_seconds <= 0
+        ):
+            raise ConfigError(
+                f"Automation '{name}' requires positive runner.timeout-seconds"
+            )
+        policy = _automation_mapping(policy, f"{entry_path}.policy")
+        _reject_unknown_automation_keys(
+            policy,
+            {"concurrency", "output", "merge"},
+            f"{entry_path}.policy",
+            {"concurency": "concurrency"},
+        )
+        repository = source.get("repository")
+        repository_path = source.get("repository-path")
+        authors = source.get("trusted-authors")
+        if not isinstance(repository, str) or not repository:
+            raise ConfigError(f"Automation '{name}' requires source.repository")
+        if not isinstance(repository_path, str) or not repository_path:
+            raise ConfigError(f"Automation '{name}' requires source.repository-path")
+        if (
+            not isinstance(authors, list)
+            or not authors
+            or not all(isinstance(author, str) and author for author in authors)
+        ):
+            raise ConfigError(
+                f"Automation '{name}' requires non-empty source.trusted-authors"
+            )
+        concurrency = policy.get("concurrency", 1)
+        if concurrency != 1:
+            raise ConfigError(
+                f"Automation '{name}' currently requires policy.concurrency: 1"
+            )
+        if policy.get("merge", "never") != "never":
+            raise ConfigError(f"Automation '{name}' requires policy.merge: never")
+        if policy.get("output", "draft-pr") != "draft-pr":
+            raise ConfigError(f"Automation '{name}' requires policy.output: draft-pr")
+        labels = source.get("labels", {})
+        labels = _automation_mapping(labels, f"{entry_path}.source.labels")
+        label_defaults = {
+            "ready": "factory:ready",
+            "running": "factory:running",
+            "review": "factory:review",
+            "blocked": "factory:blocked",
+        }
+        _reject_unknown_automation_keys(
+            labels, set(label_defaults), f"{entry_path}.source.labels"
+        )
+        resolved_labels: dict[str, str] = {}
+        for label_name, default in label_defaults.items():
+            label = labels.get(label_name, default)
+            if not isinstance(label, str) or not label.strip():
+                raise ConfigError(
+                    f"Automation '{name}' source.labels.{label_name} must be a non-empty string"
+                )
+            resolved_labels[label_name] = label
+        if len(set(resolved_labels.values())) != len(resolved_labels):
+            raise ConfigError(f"Automation '{name}' source.labels must be distinct")
+        path = Path(repository_path).expanduser()
+        if not path.is_absolute():
+            raise ConfigError(
+                f"Automation '{name}' source.repository-path must be absolute"
+            )
+        automations.append(
+            Automation(
+                name=str(name),
+                source=GitHubIssuesSource(
+                    repository=repository,
+                    repository_path=path.resolve(),
+                    trusted_authors=tuple(cast(list[str], authors)),
+                    ready_label=resolved_labels["ready"],
+                    running_label=resolved_labels["running"],
+                    review_label=resolved_labels["review"],
+                    blocked_label=resolved_labels["blocked"],
+                ),
+                runner=PiRunnerConfig(skill=skill, timeout_seconds=timeout_seconds),
+                policy=AutomationPolicy(),
+            )
+        )
+    return automations
+
+
+def get_automation(config: Mapping[str, object], name: str) -> Automation | None:
+    """Look up one automation by name."""
+    return next((item for item in get_automations(config) if item.name == name), None)

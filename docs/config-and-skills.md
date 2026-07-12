@@ -13,6 +13,36 @@ index:
 
 # Config & Skills Deep Reference
 
+## Local automations
+
+`automations:` is separate from `workflows:`. Workflows describe skill chains
+for local or GitHub Actions use; automations select trusted work from a tracker
+and dispatch it through one named Groundskeeper skill.
+
+The initial provider pair is `source.type: github-issues` and `runner.type: pi`.
+A Pi runner must explicitly name `skill`, use `approval: allow`, and use
+`session: deterministic`. Each source requires `repository`, `repository-path`,
+and at least one `trusted-author`. Safety policy is strict: concurrency is `1`,
+output is `draft-pr`, and merge is `never`. Groundskeeper validates this policy
+and enforces the accepted-result postcondition: only an open draft pull request
+with the exact closing reference reaches review. It does not sandbox a
+user-authorized Pi process. An automation skill receives normalized `TASK_ID`,
+`TASK_TITLE`, `TASK_BODY`, `TASK_URL`, `REPOSITORY`, `RECOVERY_CONTEXT`, and
+`POLICY_CONCURRENCY`, `POLICY_OUTPUT`, and `POLICY_MERGE`; ordinary skill
+rendering is unchanged.
+
+Pi runners accept optional positive `timeout-seconds` (default: `7200`) for
+long-running development work. GitHub CLI operations use a fixed 30-second
+timeout. After any worker return, Groundskeeper first reconciles the accepted
+open-draft closing PR; only when that result is absent does a Pi timeout become
+a blocked task with its actionable command error. The host lock is released when
+the tick exits. Automation entries are strict:
+unknown keys are rejected at the entry, source, runner, policy, and labels
+levels. For example, use `timeout-seconds`, not `timeout_seconds`, and
+`concurrency`, not `concurency`. A misspelled top-level `automation:` key is
+rejected; legacy top-level workflow configuration remains valid. See the README
+for a complete configuration.
+
 ## .groundskeeper/config.yml
 
 The config file defines workflows — named chains of skills that run in CI or locally.
@@ -34,7 +64,7 @@ workflows:
         allowed-tools: [Read, Write, Edit, Grep, Glob, Bash]
 ```
 
-### Triggers
+## Triggers
 
 Triggers determine when a workflow runs. Three types are supported:
 
