@@ -64,7 +64,7 @@ workflows:
         allowed-tools: [Read, Write, Edit, Grep, Glob, Bash]
 ```
 
-### Triggers
+## Triggers
 
 Triggers determine when a workflow runs. Three types are supported:
 

@@ -23,6 +23,11 @@ The domain layer has zero external dependencies. All I/O goes through protocol i
 | `SkillStore` | Load/list skills | `LocalSkillStore` (`.groundskeeper/skills/` + external paths), `BuiltinSkillStore` (shipped) |
 | `AgentRunner` | Execute a skill | `ClaudeCodeRunner` (shells out to `claude` CLI), `DryRunRunner` (prints prompt) |
 | `CIProvider` | Generate CI YAML | `GitHubActionsProvider` (Jinja2 templates) |
+| `Tracker` | Select, claim, transition, and reconcile durable tasks | `GitHubIssuesTracker` |
+| `AutomationRunner` | Execute one normalized tracker task | `PiAutomationRunner` with a configured skill |
+
+`ProcessClient` is the only operating-system process boundary. Pi and GitHub
+adapters provide typed semantic operations and bounded timeouts above it.
 
 ## Domain Models (`groundskeeper/domain/models.py`)
 
@@ -56,6 +61,8 @@ Key methods:
 
 ## Execution Flow
 
+### Skills and workflows
+
 ```
 CLI (main.py)
   → _get_stores() builds [LocalSkillStore, ..., BuiltinSkillStore]
@@ -67,6 +74,28 @@ CLI (main.py)
 ```
 
 For workflows: steps execute sequentially. `ParallelGroup` steps use `ThreadPoolExecutor` when all skills are read-only (no Write/Edit/Bash/NotebookEdit tools) or when `--parallel` is forced.
+
+### Local tracker automations
+
+```text
+automation config
+  → strict source, runner, labels, timeout, and policy parsing
+  → resolve configured skill with provenance
+  → acquire stable host-state lock for normalized repository identity
+  → reconcile running issues before selecting ready work
+  → claim at most one trusted issue
+  → render configured skill + task/recovery/policy context
+  → run Pi in a deterministic session with a bounded process group
+  → reconcile GitHub as the durable result authority
+      exact closing open draft PR → review
+      non-draft, closed, or merged closing PR → blocked policy violation
+      no accepted PR + worker failure → blocked worker error
+```
+
+The workflow instructions belong to the configured skill; the Pi adapter knows
+only how to execute a rendered prompt. `merge: never` is an accepted-result
+contract, not a credential sandbox. Host-state locking coordinates config
+worktrees on one machine and does not provide distributed locking.
 
 ## CI Generation Flow
 

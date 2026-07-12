@@ -1,118 +1,50 @@
 # Groundskeeper
 
-CLI tool that scripts AI agents to run on PRs and schedules. Users define "skills" (YAML-frontmatter + markdown prompt in `SKILL.md` files), and Groundskeeper generates CI workflows (GitHub Actions) to execute them via Claude Code on PR events, cron schedules, or manual triggers.
+Groundskeeper is a Python CLI for reusable agent skills, local workflows, generated GitHub Actions, and host-local tracker automations. Start at `groundskeeper/cli/main.py`; strict models live in `groundskeeper/domain/`, side effects in `groundskeeper/adapters/`, and application lifecycle in `groundskeeper/automation.py`.
 
-## Repo Map
+## How to Work Here
 
-```
-groundskeeper/           # Python package (the library + CLI)
-  cli/main.py            # Click CLI entry point (`gk` command)
-  domain/                # Core models, parser, triggers, errors (no external deps)
-  adapters/              # Ports: skill stores, runners, CI providers
-  builtins/              # Shipped skills + templates (config, GHA Jinja2)
-  protocols.py           # Protocol interfaces (SkillStore, AgentRunner, CIProvider)
-tests/                   # Mirrors source layout; e2e/ has installed-CLI tests
-.groundskeeper/          # User config: config.yml + skills/
-docs/AGENTS.md           # Agent routing index for docs/
-docs/                    # MkDocs Material site
-docker/                  # Dev container setup
-mise.toml                # Task runner config (all commands below)
-pyproject.toml           # Package metadata, deps, tool config (ruff, ty, pytest)
-```
+1. Read `docs/architecture.md` for ownership and `docs/config-and-skills.md` for schemas.
+2. Add behavior at the narrowest domain, application, or adapter seam.
+3. Run focused pytest while editing, then `mise run check` once near handoff.
+4. Install before testing the packaged command: `mise run install && mise run test:e2e`.
 
-## Architecture (one paragraph)
-
-Hexagonal/ports-and-adapters. Domain layer (`domain/`) defines `Skill`, `Workflow`, `RunContext`, `RunResult` models, a typed trigger system (`domain/triggers.py`), a frontmatter parser, and a config loader. `protocols.py` defines the port interfaces: `SkillStore` (loads skills), `AgentRunner` (executes via Claude Code or dry-run), `CIProvider` (generates CI YAML). Adapters implement these: `LocalSkillStore` reads from `.groundskeeper/skills/` or external paths, `BuiltinSkillStore` reads shipped skills, `ClaudeCodeRunner` shells out to `claude -p` with `--allowedTools` and JSON output parsing, `GitHubActionsProvider` renders Jinja2 templates (including chained and scheduled workflows). The CLI (`cli/main.py`) wires adapters together. Skill resolution: local → external → builtin (first-match).
-
-## Common Commands (mise task runner)
-
-| Command | What it does |
-|---|---|
-| `mise run setup` | Install deps via uv |
-| `mise run check` | Run all checks (lint + format + ty + test) |
-| `mise run test` | Unit tests with coverage (`-m 'not e2e'` by default) |
-| `mise run lint` | Ruff linter with auto-fix |
-| `mise run format` | Ruff formatter |
-| `mise run ty` | Type check with ty (strict, error-on-warning) |
-| `mise run test:e2e` | E2E tests (requires `mise run install` first) |
-| `mise run test:all` | All tests including e2e |
-| `mise run install` | Install `gk` CLI via `uv tool install` |
-| `mise run docs:serve` | Local docs server (port 8000) |
-| `mise run docs:build` | Build docs site (strict mode) |
-
-Single test: `uv run -m pytest tests/path_to_test.py::test_function_name`
-
-## Code Style
-
-Enforced by tools — run `mise run check` before pushing:
-- **Formatter/Linter**: ruff (config in `pyproject.toml`)
-- **Type checker**: ty with `error-on-warning = true` (see `[tool.ty]` in `pyproject.toml`)
-- **Python**: 3.10+, strict typing, snake_case / PascalCase conventions
-- **Imports**: stdlib → third-party → `groundskeeper` (enforced by ruff isort)
-
-## CI
-
-GitHub Actions on PR (`.github/workflows/tests.yml`): lint → format check → pytest → ty → codecov.
-
-## Skill Anatomy
-
-A skill lives in a directory with a `SKILL.md` file:
-```
-.groundskeeper/skills/<name>/SKILL.md   # local (user-defined)
-groundskeeper/builtins/skills/<name>/SKILL.md  # shipped
-<any-dir>/<name>/SKILL.md               # external (via --skill-path)
-```
-Format: YAML frontmatter (`name`, `description`, `triggers`, `allowed-tools`, `tags`, `argument-hint`) + markdown body (the prompt). `$ARGUMENTS` in the body is substituted at runtime. See `groundskeeper/domain/parser.py` for parsing rules.
-
-## gk CLI Commands
+## Commands
 
 | Command | Purpose |
 |---|---|
-| `gk init` | Bootstrap `.groundskeeper/` config and skills dir |
-| `gk list` | Show available skills (local + external + builtin) |
-| `gk run <skill> [--dry-run] [--yolo] [--args ...]` | Execute a single skill |
-| `gk run-workflow <name> [--dry-run] [--yolo] [--parallel] [--args ...]` | Execute a workflow chain from config |
-| `gk check [skill]` | Validate skill frontmatter |
-| `gk show <skill>` | Display skill metadata + body |
-| `gk render <skill>` | Output rendered prompt (used by CI) |
-| `gk generate` | Regenerate CI workflow files |
-| `gk --skill-path <dir> ...` | Add external skill directories (top-level option) |
+| `mise run check` | Ruff, formatting, strict `ty`, and non-E2E pytest |
+| `mise run test:e2e` | Installed-CLI process and lifecycle tests |
+| `mise run docs:build` | Strict MkDocs build |
+| `uv run -m pytest tests/path.py::test_name` | Focused test |
 
-## Key Invariants
+## Architecture
 
-- Skill names must be kebab-case (validated by parser regex)
-- Skill resolution order: local → external (--skill-path) → builtin (first-match wins)
-- `ClaudeCodeRunner` passes `--allowedTools` from skill frontmatter (or workflow override) and parses JSON output
-- Workflows in `.groundskeeper/config.yml` support per-step and workflow-level `allowed-tools` overrides (see `docs/config-and-skills.md`)
-- Multi-skill CI workflows generate a single GitHub Actions file with chained jobs (stages run in parallel within, sequential across)
-- Parallel groups in workflows auto-parallelize locally only when all skills are read-only; use `--parallel` to force
-- `--yolo` flag skips all permission checks (`--dangerously-skip-permissions`)
-- `pytest` excludes `e2e` marker by default (`addopts = "-m 'not e2e'"`)
-- ty is strict: warnings are errors
-- Triggers are typed: `EventTrigger`, `ScheduleTrigger`, `ManualTrigger` (see `domain/triggers.py`). Schedule triggers auto-inject `workflow_dispatch` for manual runs.
-- Templates conditionally emit draft-PR checks and PR-specific concurrency groups (only for workflows with `pull_request` triggers)
+- `SkillStore`, `AgentRunner`, and `CIProvider` support the original skill/workflow path.
+- `Tracker` and `AutomationRunner` support the local factory path.
+- `AutomationService` owns ready/running/review/blocked reconciliation; adapters own GitHub, Pi, locking, and processes.
+- `ProcessClient` is the only operating-system subprocess boundary.
+- Skill resolution is local → external `--skill-path` → builtin.
 
-## Task-Specific Docs
+## Gotchas
 
-### Cross-cutting docs in `docs/`
+- **DO** keep automation workflow prose in the configured `SKILL.md`. **NOT** in `PiClient` or `AutomationService`. **BECAUSE** Groundskeeper owns execution and lifecycle; the consuming repo owns its workflow.
+- **DO** validate strict automation config before claiming work. **NOT** silently coerce unknown keys, paths, labels, or runner settings. **BECAUSE** reviewed configuration must match scheduled behavior.
+- **DO** treat GitHub as the durable result authority after a worker returns. **NOT** trust worker stdout or exit status alone. **BECAUSE** a valid draft PR may exist after a late timeout, while unrelated or non-draft PRs must block.
+- **DO** keep task admission single-host and repository-scoped. **NOT** claim distributed locking. **BECAUSE** the stable host-state lock coordinates config worktrees but not multiple machines.
+- **DO** terminate the complete process group on timeout. **NOT** only the direct Pi process. **BECAUSE** descendants can retain pipes and continue mutating after lock release.
+- **DO** keep `merge: never` language precise. **NOT** describe it as a credential sandbox. **BECAUSE** Groundskeeper enforces the accepted open-draft postcondition but cannot prevent every command available to user-authorized Pi credentials.
+- **DO** preserve exact closing-reference and draft-status verification in `GhClient`. **NOT** accept a printed URL as completion. **BECAUSE** tracker transition depends on independently verified GitHub state.
+- **DO** add installed E2E for process, recovery, or CLI contract changes. **NOT** rely only on mocked Click tests. **BECAUSE** packaging, argv, crash recovery, and state transitions cross real process boundaries.
 
-| Doc | Topic |
-|-----|-------|
-| `docs/AGENTS.md` | Agent routing index for all docs |
-| `docs/architecture.md` | Ports-and-adapters flow, domain model relationships, execution pipeline |
-| `docs/config-and-skills.md` | config.yml format, skill frontmatter spec, allowed-tools precedence |
-| `docs/future-work.md` | Planned features: worktree isolation, additional agent runners |
+## Related Context
 
-### Reference
+| Path | What is there |
+|---|---|
+| `docs/architecture.md` | Both execution paths and ownership seams |
+| `docs/config-and-skills.md` | Workflow and automation configuration contracts |
+| `docs/reference/cli.md` | Human and agent-facing command surface |
+| `tests/e2e/test_e2e_commands.py` | Installed CLI and automation lifecycle proof |
+| `docs/AGENTS.md` | Documentation routing index |
 
-| Doc | Topic |
-|-----|-------|
-| `docs/reference/skills.md` | User-facing skill authoring guide |
-| `docs/reference/cli.md` | CLI reference |
-| `docs/reference/api.md` | Auto-generated API docs |
-
-## Key References
-
-- `groundskeeper/domain/parser.py` -- authoritative parsing logic for SKILL.md
-- `groundskeeper/domain/config.py` -- config loading, workflow/step model, trigger parsing, tool precedence logic
-- `groundskeeper/domain/triggers.py` -- typed trigger system (EventTrigger, ScheduleTrigger, ManualTrigger)
+<!-- generated-by: context-engineering@2.2.0 | last-updated: 2026-07-12 -->
