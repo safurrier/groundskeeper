@@ -575,6 +575,34 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Execution Flow">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#skills-and-workflows" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Skills and workflows
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#local-tracker-automations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Local tracker automations
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -632,8 +660,20 @@
 <td>Generate CI YAML</td>
 <td><code>GitHubActionsProvider</code> (Jinja2 templates)</td>
 </tr>
+<tr>
+<td><code>Tracker</code></td>
+<td>Select, claim, transition, and reconcile durable tasks</td>
+<td><code>GitHubIssuesTracker</code></td>
+</tr>
+<tr>
+<td><code>AutomationRunner</code></td>
+<td>Execute one normalized tracker task</td>
+<td><code>PiAutomationRunner</code> with a configured skill</td>
+</tr>
 </tbody>
 </table>
+<p><code>ProcessClient</code> is the only operating-system process boundary. Pi and GitHub
+adapters provide typed semantic operations and bounded timeouts above it.</p>
 <h2 id="domain-models-groundskeeperdomainmodelspy">Domain Models (<code>groundskeeper/domain/models.py</code>)<a class="headerlink" href="#domain-models-groundskeeperdomainmodelspy" title="Permanent link">&para;</a></h2>
 <ul>
 <li><strong><code>Skill</code></strong> — parsed SKILL.md: name, description, body, source, allowed_tools, triggers, metadata</li>
@@ -661,6 +701,7 @@
 - <code>Workflow.effective_tools(ref)</code> resolves tool precedence (per-step &gt; workflow &gt; skill frontmatter)
 - <code>Workflow.has_pr_trigger</code> / <code>Workflow.has_schedule</code> — trigger type queries used by CI generation</p>
 <h2 id="execution-flow">Execution Flow<a class="headerlink" href="#execution-flow" title="Permanent link">&para;</a></h2>
+<h3 id="skills-and-workflows">Skills and workflows<a class="headerlink" href="#skills-and-workflows" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>CLI (main.py)
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>  → _get_stores() builds [LocalSkillStore, ..., BuiltinSkillStore]
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>  → resolve_skill() iterates stores (first match wins)
@@ -670,17 +711,35 @@
 <a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>  → JSON response parsed into RunResult
 </code></pre></div>
 <p>For workflows: steps execute sequentially. <code>ParallelGroup</code> steps use <code>ThreadPoolExecutor</code> when all skills are read-only (no Write/Edit/Bash/NotebookEdit tools) or when <code>--parallel</code> is forced.</p>
+<h3 id="local-tracker-automations">Local tracker automations<a class="headerlink" href="#local-tracker-automations" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>automation config
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>  → strict source, runner, labels, timeout, and policy parsing
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>  → resolve configured skill with provenance
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>  → acquire stable host-state lock for normalized repository identity
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>  → reconcile running issues before selecting ready work
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>  → claim at most one trusted issue
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>  → render configured skill + task/recovery/policy context
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>  → run Pi in a deterministic session with a bounded process group
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>  → reconcile GitHub as the durable result authority
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>      exact closing open draft PR → review
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>      non-draft, closed, or merged closing PR → blocked policy violation
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>      no accepted PR + worker failure → blocked worker error
+</code></pre></div>
+<p>The workflow instructions belong to the configured skill; the Pi adapter knows
+only how to execute a rendered prompt. <code>merge: never</code> is an accepted-result
+contract, not a credential sandbox. Host-state locking coordinates config
+worktrees on one machine and does not provide distributed locking.</p>
 <h2 id="ci-generation-flow">CI Generation Flow<a class="headerlink" href="#ci-generation-flow" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>config.yml → load_config() → get_workflows()
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>  → _parse_triggers() converts raw YAML into typed TriggerSpec tuple
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>  → _triggers_to_actions_yaml() converts back to GHA on: syntax
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>  → Templates receive is_pr_trigger flag for conditional rendering:
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>      PR triggers: draft check + PR-number concurrency group
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>      Schedule/manual: simple concurrency group, no draft check
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>  → Single-skill workflow: generate_caller() from caller.yml.j2
-<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>  → Multi-skill workflow: generate_chain_workflow() from chain.yml.j2
-<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>      Skills within a stage run in parallel (separate GHA jobs)
-<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>      Stages are sequential (each waits for the previous)
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>config.yml → load_config() → get_workflows()
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>  → _parse_triggers() converts raw YAML into typed TriggerSpec tuple
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>  → _triggers_to_actions_yaml() converts back to GHA on: syntax
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>  → Templates receive is_pr_trigger flag for conditional rendering:
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>      PR triggers: draft check + PR-number concurrency group
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>      Schedule/manual: simple concurrency group, no draft check
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>  → Single-skill workflow: generate_caller() from caller.yml.j2
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>  → Multi-skill workflow: generate_chain_workflow() from chain.yml.j2
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>      Skills within a stage run in parallel (separate GHA jobs)
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>      Stages are sequential (each waits for the previous)
 </code></pre></div>
 <p>Templates live in <code>groundskeeper/builtins/templates/github_actions/</code>.</p>
 

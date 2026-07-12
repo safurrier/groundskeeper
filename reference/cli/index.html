@@ -483,6 +483,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#gk-automation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        gk automation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#gk-init" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -658,6 +669,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#gk-automation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        gk automation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#gk-init" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -752,9 +774,36 @@
 
 
 <h1 id="cli-reference">CLI Reference<a class="headerlink" href="#cli-reference" title="Permanent link">&para;</a></h1>
+<h2 id="gk-automation"><code>gk automation</code><a class="headerlink" href="#gk-automation" title="Permanent link">&para;</a></h2>
+<p>Automation commands use <code>.groundskeeper/config.yml</code> by default. Use
+<code>gk automation --config PATH ...</code> to select a different file.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>gk<span class="w"> </span>automation<span class="w"> </span>list<span class="w"> </span><span class="o">[</span>--json<span class="o">]</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>gk<span class="w"> </span>automation<span class="w"> </span>show<span class="w"> </span>NAME<span class="w"> </span><span class="o">[</span>--json<span class="o">]</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>gk<span class="w"> </span>automation<span class="w"> </span>validate<span class="w"> </span><span class="o">[</span>NAME<span class="o">]</span><span class="w"> </span><span class="o">[</span>--json<span class="o">]</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>gk<span class="w"> </span>automation<span class="w"> </span>tick<span class="w"> </span>NAME<span class="w"> </span><span class="o">[</span>--dry-run<span class="o">]</span><span class="w"> </span><span class="o">[</span>--json<span class="o">]</span>
+</code></pre></div>
+<p><code>list</code> and <code>show</code> inspect configured local automations. <code>show --json</code> includes
+the resolved repository path, lifecycle labels, runner settings, policy, and
+selected-skill provenance (name, source kind, and path, never the prompt body).
+<code>validate --json</code> returns the same resolved skill provenance after checking it.
+<code>validate</code> checks strict config, named-skill resolution, Pi availability, the
+repository path, and the fixed draft-only/never-merge policy without contacting
+GitHub or starting work. <code>tick</code> runs one bounded reconciliation pass. Dry-run
+selects and reports eligible work without labels, comments, or worker launch.
+Its compact output omits issue bodies.</p>
+<p>Pi runner configuration accepts optional <code>timeout-seconds</code> (default: 7,200) for
+long-running tasks. GitHub CLI calls use a fixed 30-second timeout. Groundskeeper
+does not sandbox a user-authorized Pi process; it enforces its accepted-result
+postcondition by transitioning to review only for an open draft pull request
+with the exact closing reference.</p>
+<p>All JSON responses use a versioned envelope:
+<code>{"version":1,"status":"...","data":{...},"exit_code":N}</code>. Exit <code>0</code> means
+no work, review-ready work, or a successful dry-run. Exit <code>2</code> is a configuration,
+command, tracker, or lock error; <code>4</code> is claim contention; and <code>5</code> is a blocked
+worker. Commands are noninteractive and ticks use a single-host advisory lock.</p>
 <h2 id="gk-init"><code>gk init</code><a class="headerlink" href="#gk-init" title="Permanent link">&para;</a></h2>
 <p>Initialize Groundskeeper in the current project.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>gk<span class="w"> </span>init<span class="w"> </span><span class="o">[</span>--non-interactive<span class="o">]</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>gk<span class="w"> </span>init<span class="w"> </span><span class="o">[</span>--non-interactive<span class="o">]</span>
 </code></pre></div>
 <p>Creates <code>.groundskeeper/</code> directory structure and default config. Run <code>gk generate</code> separately to create CI workflow files.</p>
 <p><strong>Options:</strong></p>
@@ -763,16 +812,16 @@
 </ul>
 <h2 id="gk-list"><code>gk list</code><a class="headerlink" href="#gk-list" title="Permanent link">&para;</a></h2>
 <p>Show available skills with source provenance.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>gk<span class="w"> </span>list
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>gk<span class="w"> </span>list
 </code></pre></div>
 <p>Displays all skills from local and builtin stores, showing name, source (<code>local</code> or <code>builtin</code>), and description.</p>
 <h2 id="gk-show-name"><code>gk show &lt;name&gt;</code><a class="headerlink" href="#gk-show-name" title="Permanent link">&para;</a></h2>
 <p>Display a skill's metadata and body.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>gk<span class="w"> </span>show<span class="w"> </span>codex-code-review
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>gk<span class="w"> </span>show<span class="w"> </span>codex-code-review
 </code></pre></div>
 <h2 id="gk-run-name"><code>gk run &lt;name&gt;</code><a class="headerlink" href="#gk-run-name" title="Permanent link">&para;</a></h2>
 <p>Execute a skill locally.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>gk<span class="w"> </span>run<span class="w"> </span>&lt;name&gt;<span class="w"> </span><span class="o">[</span>--args<span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="o">]</span><span class="w"> </span><span class="o">[</span>--dry-run<span class="o">]</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>gk<span class="w"> </span>run<span class="w"> </span>&lt;name&gt;<span class="w"> </span><span class="o">[</span>--args<span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="o">]</span><span class="w"> </span><span class="o">[</span>--dry-run<span class="o">]</span>
 </code></pre></div>
 <p><strong>Options:</strong></p>
 <ul>
@@ -781,16 +830,16 @@
 </ul>
 <h2 id="gk-check-name"><code>gk check [name]</code><a class="headerlink" href="#gk-check-name" title="Permanent link">&para;</a></h2>
 <p>Validate skill frontmatter and structure.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>gk<span class="w"> </span>check<span class="w">              </span><span class="c1"># Check all skills</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>gk<span class="w"> </span>check<span class="w"> </span>my-skill<span class="w">     </span><span class="c1"># Check a specific skill</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>gk<span class="w"> </span>check<span class="w">              </span><span class="c1"># Check all skills</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>gk<span class="w"> </span>check<span class="w"> </span>my-skill<span class="w">     </span><span class="c1"># Check a specific skill</span>
 </code></pre></div>
 <h2 id="gk-generate"><code>gk generate</code><a class="headerlink" href="#gk-generate" title="Permanent link">&para;</a></h2>
 <p>Regenerate CI workflow files from <code>.groundskeeper/config.yml</code>.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>gk<span class="w"> </span>generate
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>gk<span class="w"> </span>generate
 </code></pre></div>
 <h2 id="gk-render-name"><code>gk render &lt;name&gt;</code><a class="headerlink" href="#gk-render-name" title="Permanent link">&para;</a></h2>
 <p>Output the rendered prompt to stdout. Used internally by CI.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>gk<span class="w"> </span>render<span class="w"> </span>&lt;name&gt;<span class="w"> </span><span class="o">[</span>--args<span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="o">]</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>gk<span class="w"> </span>render<span class="w"> </span>&lt;name&gt;<span class="w"> </span><span class="o">[</span>--args<span class="w"> </span><span class="s2">&quot;...&quot;</span><span class="o">]</span>
 </code></pre></div>
 
 

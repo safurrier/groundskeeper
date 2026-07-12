@@ -523,6 +523,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#local-automations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Local automations
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#groundskeeperconfigyml" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -531,10 +542,9 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label=".groundskeeper/config.yml">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
+</li>
+      
+        <li class="md-nav__item">
   <a href="#triggers" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -543,7 +553,8 @@
     </span>
   </a>
   
-</li>
+    <nav class="md-nav" aria-label="Triggers">
+      <ul class="md-nav__list">
         
           <li class="md-nav__item">
   <a href="#report-mode" class="md-nav__link">
@@ -662,6 +673,32 @@
 
 
 <h1 id="config-skills-deep-reference">Config &amp; Skills Deep Reference<a class="headerlink" href="#config-skills-deep-reference" title="Permanent link">&para;</a></h1>
+<h2 id="local-automations">Local automations<a class="headerlink" href="#local-automations" title="Permanent link">&para;</a></h2>
+<p><code>automations:</code> is separate from <code>workflows:</code>. Workflows describe skill chains
+for local or GitHub Actions use; automations select trusted work from a tracker
+and dispatch it through one named Groundskeeper skill.</p>
+<p>The initial provider pair is <code>source.type: github-issues</code> and <code>runner.type: pi</code>.
+A Pi runner must explicitly name <code>skill</code>, use <code>approval: allow</code>, and use
+<code>session: deterministic</code>. Each source requires <code>repository</code>, <code>repository-path</code>,
+and at least one <code>trusted-author</code>. Safety policy is strict: concurrency is <code>1</code>,
+output is <code>draft-pr</code>, and merge is <code>never</code>. Groundskeeper validates this policy
+and enforces the accepted-result postcondition: only an open draft pull request
+with the exact closing reference reaches review. It does not sandbox a
+user-authorized Pi process. An automation skill receives normalized <code>TASK_ID</code>,
+<code>TASK_TITLE</code>, <code>TASK_BODY</code>, <code>TASK_URL</code>, <code>REPOSITORY</code>, <code>RECOVERY_CONTEXT</code>, and
+<code>POLICY_CONCURRENCY</code>, <code>POLICY_OUTPUT</code>, and <code>POLICY_MERGE</code>; ordinary skill
+rendering is unchanged.</p>
+<p>Pi runners accept optional positive <code>timeout-seconds</code> (default: <code>7200</code>) for
+long-running development work. GitHub CLI operations use a fixed 30-second
+timeout. After any worker return, Groundskeeper first reconciles the accepted
+open-draft closing PR; only when that result is absent does a Pi timeout become
+a blocked task with its actionable command error. The host lock is released when
+the tick exits. Automation entries are strict:
+unknown keys are rejected at the entry, source, runner, policy, and labels
+levels. For example, use <code>timeout-seconds</code>, not <code>timeout_seconds</code>, and
+<code>concurrency</code>, not <code>concurency</code>. A misspelled top-level <code>automation:</code> key is
+rejected; legacy top-level workflow configuration remains valid. See the README
+for a complete configuration.</p>
 <h2 id="groundskeeperconfigyml">.groundskeeper/config.yml<a class="headerlink" href="#groundskeeperconfigyml" title="Permanent link">&para;</a></h2>
 <p>The config file defines workflows — named chains of skills that run in CI or locally.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">version</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
@@ -679,7 +716,7 @@
 <a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">another-skill</span><span class="w">         </span><span class="c1"># dict format with per-step tools</span>
 <a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">        </span><span class="nt">allowed-tools</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">Read</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">Write</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">Edit</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">Grep</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">Glob</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">Bash</span><span class="p p-Indicator">]</span>
 </code></pre></div>
-<h3 id="triggers">Triggers<a class="headerlink" href="#triggers" title="Permanent link">&para;</a></h3>
+<h2 id="triggers">Triggers<a class="headerlink" href="#triggers" title="Permanent link">&para;</a></h2>
 <p>Triggers determine when a workflow runs. Three types are supported:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># PR event trigger — runs on GitHub PR events</span>
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nt">triggers</span><span class="p">:</span>
