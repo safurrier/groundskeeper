@@ -7,6 +7,7 @@ from typing import Protocol
 from groundskeeper.domain.automation import (
     AutomationTask,
     ClaimResult,
+    SessionMetadata,
     TaskState,
     WorkResult,
 )
@@ -61,4 +62,5 @@ class Tracker(Protocol):
 class AutomationRunner(Protocol):
     """Executes a normalized automation task."""
 
+    def session_metadata(self, task: AutomationTask) -> SessionMetadata | None: ...
     def run(self, task: AutomationTask, recovery: bool = False) -> WorkResult: ...

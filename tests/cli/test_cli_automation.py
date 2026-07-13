@@ -245,6 +245,32 @@ def test_blocked_result_has_stable_exit_code(
 
 
 @patch("groundskeeper.cli.main.PiClient.is_available", return_value=True)
+@patch("groundskeeper.cli.main.AutomationService.tick")
+def test_json_result_exposes_resumable_factory_session(
+    mock_tick: object, mock_available: object, tmp_path: Path
+) -> None:
+    mock_tick.return_value = TickResult(  # type: ignore[attr-defined]
+        "daily-dev",
+        "review",
+        pull_request_url="https://github/pr/9",
+        session_id="session-123",
+        session_name="gk-me-dots-7",
+        resume_command="pi --session session-123",
+    )
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        Path(".groundskeeper").mkdir(exist_ok=True)
+        Path(".groundskeeper/config.yml").write_text(CONFIG)
+        result = runner.invoke(cli, ["automation", "tick", "daily-dev", "--json"])
+
+    payload = json.loads(result.output)
+    assert result.exit_code == 0
+    assert payload["data"]["session_id"] == "session-123"
+    assert payload["data"]["session_name"] == "gk-me-dots-7"
+    assert payload["data"]["resume_command"] == "pi --session session-123"
+
+
+@patch("groundskeeper.cli.main.PiClient.is_available", return_value=True)
 @patch("groundskeeper.cli.main.TickLock.__enter__")
 def test_lock_contention_json_envelope(
     mock_enter: object, mock_available: object, tmp_path: Path

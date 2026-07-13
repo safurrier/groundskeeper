@@ -458,6 +458,9 @@ def automation_tick(
         "task": task_data,
         "pull_request_url": result.pull_request_url,
         "detail": result.detail,
+        "session_id": result.session_id,
+        "session_name": result.session_name,
+        "resume_command": result.resume_command,
     }
     exit_code = {
         "no-work": 0,

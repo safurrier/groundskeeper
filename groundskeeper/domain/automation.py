@@ -39,6 +39,15 @@ class ClaimResult:
 
 
 @dataclass(frozen=True)
+class SessionMetadata:
+    """Stable identity needed to inspect or resume an automation session."""
+
+    session_id: str
+    session_name: str
+    resume_command: str
+
+
+@dataclass(frozen=True)
 class WorkResult:
     """Result returned by an automation worker."""
 
@@ -47,6 +56,9 @@ class WorkResult:
     error: str = ""
     exit_code: int = 0
     pull_request_url: str | None = None
+    session_id: str | None = None
+    session_name: str | None = None
+    resume_command: str | None = None
 
 
 @dataclass(frozen=True)
@@ -58,3 +70,6 @@ class TickResult:
     task: AutomationTask | None = None
     pull_request_url: str | None = None
     detail: str = ""
+    session_id: str | None = None
+    session_name: str | None = None
+    resume_command: str | None = None

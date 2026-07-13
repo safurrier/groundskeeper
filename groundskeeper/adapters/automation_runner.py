@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Protocol
 
 from groundskeeper.adapters.pi import PiExecutionSettings
-from groundskeeper.domain.automation import AutomationTask, WorkResult
+from groundskeeper.domain.automation import AutomationTask, SessionMetadata, WorkResult
 from groundskeeper.domain.config import AutomationPolicy, PiRunnerConfig
 from groundskeeper.domain.models import Skill
 
@@ -27,14 +27,25 @@ class AutomationSkillRenderer:
         self._skill = skill
         self._policy = policy
 
-    def render(self, task: AutomationTask, recovery: bool) -> str:
+    def render(
+        self,
+        task: AutomationTask,
+        recovery: bool,
+        settings: PiExecutionSettings,
+    ) -> str:
         """Render a skill without changing ordinary skill rendering behavior."""
         return (
-            f"{self._skill.render()}\n\n{self._context(task, recovery, self._policy)}"
+            f"{self._skill.render()}\n\n"
+            f"{self._context(task, recovery, self._policy, settings)}"
         )
 
     @staticmethod
-    def _context(task: AutomationTask, recovery: bool, policy: AutomationPolicy) -> str:
+    def _context(
+        task: AutomationTask,
+        recovery: bool,
+        policy: AutomationPolicy,
+        settings: PiExecutionSettings,
+    ) -> str:
         recovery_context = (
             "Resume the deterministic session for this task and reconcile durable state."
             if recovery
@@ -52,6 +63,9 @@ class AutomationSkillRenderer:
                 f"POLICY_CONCURRENCY: {policy.concurrency}",
                 f"POLICY_OUTPUT: {policy.output}",
                 f"POLICY_MERGE: {policy.merge}",
+                f"FACTORY_SESSION_ID: {settings.session_id}",
+                f"FACTORY_SESSION_NAME: {settings.name}",
+                f"FACTORY_RESUME_COMMAND: pi --session {settings.session_id}",
                 f"RECOVERY_CONTEXT: {recovery_context}",
             )
         )
@@ -72,14 +86,28 @@ class PiAutomationRunner:
         self._renderer = renderer
         self._config = config
 
-    def run(self, task: AutomationTask, recovery: bool = False) -> WorkResult:
+    def _settings(self, task: AutomationTask) -> PiExecutionSettings:
         identity = f"groundskeeper:{task.target_repository}:{task.external_id}"
-        settings = PiExecutionSettings(
+        return PiExecutionSettings(
             session_id=str(uuid.uuid5(uuid.NAMESPACE_URL, identity)),
             name=f"gk-{task.target_repository.replace('/', '-')}-{task.external_id}",
             approval=self._config.approval,
             timeout_seconds=self._config.timeout_seconds,
         )
+
+    def session_metadata(self, task: AutomationTask) -> SessionMetadata:
+        """Return stable session identity without starting or resuming Pi."""
+        settings = self._settings(task)
+        return SessionMetadata(
+            settings.session_id,
+            settings.name,
+            f"pi --session {settings.session_id}",
+        )
+
+    def run(self, task: AutomationTask, recovery: bool = False) -> WorkResult:
+        settings = self._settings(task)
         return self._client.run_prompt(
-            self._renderer.render(task, recovery), self._repository_path, settings
+            self._renderer.render(task, recovery, settings),
+            self._repository_path,
+            settings,
         )

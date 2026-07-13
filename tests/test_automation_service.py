@@ -5,6 +5,7 @@ from groundskeeper.automation import AutomationService
 from groundskeeper.domain.automation import (
     AutomationTask,
     ClaimResult,
+    SessionMetadata,
     TaskState,
     WorkResult,
 )
@@ -53,9 +54,15 @@ def _raise_github_timeout(task: AutomationTask) -> str | None:
 
 
 class FakeRunner:
-    def __init__(self, result: WorkResult) -> None:
+    def __init__(
+        self, result: WorkResult, metadata: SessionMetadata | None = None
+    ) -> None:
         self.result = result
+        self.metadata = metadata
         self.calls = 0
+
+    def session_metadata(self, task: AutomationTask) -> SessionMetadata | None:
+        return self.metadata
 
     def run(self, task: AutomationTask, recovery: bool = False) -> WorkResult:
         self.calls += 1
@@ -78,6 +85,32 @@ def test_success_requires_pr_and_transitions_to_review() -> None:
     result = AutomationService(tracker, runner).tick(AUTOMATION)
     assert result.status == "review"
     assert tracker.transitions == [(TaskState.REVIEW, "https://github/pr/1")]
+
+
+def test_successful_review_propagates_resumable_session_metadata() -> None:
+    tracker = FakeTracker()
+    pull_requests = iter([None, "https://github/pr/1"])
+    tracker.find_pull_request = lambda task: next(pull_requests)  # type: ignore[method-assign]
+    worker = WorkResult(
+        True,
+        session_id="session-123",
+        session_name="gk-me-dots-7",
+        resume_command="pi --session session-123",
+    )
+
+    result = AutomationService(tracker, FakeRunner(worker)).tick(AUTOMATION)
+
+    assert result.status == "review"
+    assert result.session_id == "session-123"
+    assert result.session_name == "gk-me-dots-7"
+    assert result.resume_command == "pi --session session-123"
+    assert result.detail == (
+        "https://github/pr/1\n\n"
+        "Factory session: `session-123`\n"
+        "Session name: `gk-me-dots-7`\n"
+        "Resume: `pi --session session-123`"
+    )
+    assert tracker.transitions == [(TaskState.REVIEW, result.detail)]
 
 
 def test_worker_failure_with_valid_draft_pr_reconciles_to_review() -> None:
@@ -140,6 +173,25 @@ def test_timed_out_worker_is_blocked_with_actionable_detail() -> None:
     ]
 
 
+def test_worker_failure_includes_resumable_session_metadata() -> None:
+    tracker = FakeTracker()
+    worker = WorkResult(
+        False,
+        error="boom",
+        exit_code=1,
+        session_id="session-123",
+        session_name="gk-me-dots-7",
+        resume_command="pi --session session-123",
+    )
+
+    result = AutomationService(tracker, FakeRunner(worker)).tick(AUTOMATION)
+
+    assert result.status == "blocked"
+    assert result.session_id == "session-123"
+    assert result.detail.startswith("boom\n\nFactory session: `session-123`")
+    assert tracker.transitions == [(TaskState.BLOCKED, result.detail)]
+
+
 def test_worker_failure_is_visible_and_recoverable() -> None:
     tracker = FakeTracker()
     result = AutomationService(
@@ -155,6 +207,25 @@ def test_existing_pr_reconciles_without_dispatch() -> None:
     runner = FakeRunner(WorkResult(True))
     result = AutomationService(tracker, runner).tick(AUTOMATION)
     assert result.status == "review"
+    assert runner.calls == 0
+
+
+def test_running_task_with_existing_pr_preserves_session_handoff() -> None:
+    tracker = FakeTracker()
+    running = replace(TASK, state=TaskState.RUNNING)
+    tracker.list_running = lambda: [running]  # type: ignore[method-assign]
+    tracker.pr = "https://github/pr/9"
+    metadata = SessionMetadata(
+        "session-123", "gk-me-dots-7", "pi --session session-123"
+    )
+    runner = FakeRunner(WorkResult(True), metadata)
+
+    result = AutomationService(tracker, runner).tick(AUTOMATION)
+
+    assert result.status == "review"
+    assert result.session_id == "session-123"
+    assert result.detail.startswith("https://github/pr/9\n\nFactory session")
+    assert tracker.transitions == [(TaskState.REVIEW, result.detail)]
     assert runner.calls == 0
 
 

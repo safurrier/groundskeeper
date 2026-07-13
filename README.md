@@ -68,7 +68,14 @@ issue bodies. Set a scheduler's working directory to the repository containing
 `.groundskeeper/config.yml`, or pass `gk automation --config PATH ...`.
 
 Each issue maps to a deterministic UUIDv5 Pi session and stable run name. Pi
-runs have a configurable positive timeout (`timeout-seconds`, default 7,200
+output streams to Groundskeeper's stderr for live scheduler logs while the final
+versioned JSON result remains on stdout. Review and blocked results include the
+session ID, name, and generic `pi --session ID` resume command; GitHub transition
+comments preserve the same handoff metadata. Streaming Pi automations require a
+POSIX host so Groundskeeper can terminate the complete process group before
+releasing repository locks; unsupported hosts fail before starting Pi.
+
+Pi runs have a configurable positive timeout (`timeout-seconds`, default 7,200
 seconds); GitHub CLI operations have fixed 30-second timeouts. After a timeout,
 Groundskeeper reconciles the same accepted GitHub result first; without one, it
 blocks the claimed issue with the command error and releases the host lock for retry.
