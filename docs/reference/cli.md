@@ -41,8 +41,9 @@ scheduler logs show progress without corrupting JSON stdout. Terminal review or
 blocked results expose `session_id`, `session_name`, and `resume_command` in the
 JSON `data` object. The generic resume command uses `pi`; callers with auth
 profiles can substitute their profile wrapper, such as `pih`. Pi automation
-requires POSIX process-group isolation; unsupported hosts fail before worker
-startup rather than risk descendants surviving after lock release.
+requires POSIX process-group isolation; validation and live ticks reject
+unsupported hosts before tracker access, issue claim, or worker startup rather
+than risk descendants surviving after lock release.
 
 Pi runner configuration accepts optional `timeout-seconds` (default: 7,200) for
 long-running tasks. GitHub CLI calls use a fixed 30-second timeout. Groundskeeper

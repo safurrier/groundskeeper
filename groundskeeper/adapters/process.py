@@ -47,6 +47,10 @@ def _drain_process_output(
 class ProcessClient:
     """Executes commands without shell interpolation."""
 
+    def supports_streaming_process_groups(self) -> bool:
+        """Return whether streaming workers can be terminated as one process group."""
+        return STREAMING_PROCESS_GROUPS_SUPPORTED
+
     def run(
         self, argv: tuple[str, ...], cwd: Path, timeout: int | None = None
     ) -> CommandResult:

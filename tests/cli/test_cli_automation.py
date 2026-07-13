@@ -149,6 +149,29 @@ def test_tick_dry_run_omits_issue_body_from_json(
     assert json.loads(result.output)["data"]["task"]["id"] == "7"
 
 
+@patch("groundskeeper.cli.main.PiClient.supports_automation", return_value=False)
+@patch("groundskeeper.cli.main.PiClient.is_available", return_value=True)
+@patch("groundskeeper.cli.main.AutomationService.tick")
+def test_unsupported_host_fails_before_tracker_mutation(
+    mock_tick: object,
+    mock_available: object,
+    mock_supported: object,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        Path(".groundskeeper").mkdir(exist_ok=True)
+        Path(".groundskeeper/config.yml").write_text(CONFIG)
+        result = runner.invoke(cli, ["automation", "tick", "daily-dev", "--json"])
+
+    assert result.exit_code == 2
+    payload = json.loads(result.output)
+    assert "requires POSIX process-group isolation" in payload["data"]["error"]
+    mock_available.assert_called_once()  # type: ignore[attr-defined]
+    mock_supported.assert_called_once()  # type: ignore[attr-defined]
+    mock_tick.assert_not_called()  # type: ignore[attr-defined]
+
+
 def test_text_errors_use_documented_exit_code(tmp_path: Path) -> None:
     runner = CliRunner()
     with runner.isolated_filesystem(temp_dir=tmp_path):

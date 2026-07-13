@@ -34,6 +34,10 @@ class PiClient:
         """Return whether the Pi executable is discoverable without invoking it."""
         return shutil.which("pi") is not None
 
+    def supports_automation(self) -> bool:
+        """Return whether the host can safely contain Pi's descendant processes."""
+        return self._process.supports_streaming_process_groups()
+
     def run_prompt(
         self, prompt: str, cwd: Path, settings: PiExecutionSettings
     ) -> WorkResult:
