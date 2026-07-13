@@ -271,6 +271,11 @@ def _build_automation_runner(
         raise ConfigError(
             "Pi CLI not found. Install Pi and retry 'gk automation validate'."
         )
+    if require_available and not client.supports_automation():
+        raise ConfigError(
+            "Pi automation requires POSIX process-group isolation; "
+            "run this automation on macOS or Linux."
+        )
     return PiAutomationRunner(
         client,
         repository_path,
@@ -458,6 +463,9 @@ def automation_tick(
         "task": task_data,
         "pull_request_url": result.pull_request_url,
         "detail": result.detail,
+        "session_id": result.session_id,
+        "session_name": result.session_name,
+        "resume_command": result.resume_command,
     }
     exit_code = {
         "no-work": 0,

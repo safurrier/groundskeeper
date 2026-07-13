@@ -64,6 +64,26 @@ def test_pi_runner_renders_normalized_task_context_with_typed_settings() -> None
     assert client.settings.timeout_seconds == 7200
     assert "POLICY_OUTPUT: draft-pr" in client.prompt
     assert "POLICY_MERGE: never" in client.prompt
+    assert f"FACTORY_SESSION_ID: {client.settings.session_id}" in client.prompt
+    assert "FACTORY_SESSION_NAME: gk-me-dots-3" in client.prompt
+    assert (
+        f"FACTORY_RESUME_COMMAND: pi --session {client.settings.session_id}"
+        in client.prompt
+    )
+
+
+def test_pi_runner_exposes_session_metadata_without_starting_worker() -> None:
+    client = FakePiClient()
+    task = AutomationTask(
+        "github", "3", "Fix it", "Acceptance", "https://issue/3", "alex", "me/dots"
+    )
+
+    metadata = _runner(client).session_metadata(task)
+
+    assert metadata.session_id
+    assert metadata.session_name == "gk-me-dots-3"
+    assert metadata.resume_command == f"pi --session {metadata.session_id}"
+    assert client.settings is None
 
 
 def test_recovery_reuses_deterministic_session_and_changes_only_context() -> None:
@@ -84,11 +104,17 @@ class FakeProcess:
     def __init__(self) -> None:
         self.argv: tuple[str, ...] = ()
         self.timeout: int | None = None
+        self.streaming = False
 
-    def run(
-        self, argv: tuple[str, ...], cwd: Path, timeout: int | None = None
+    def run_streaming(
+        self,
+        argv: tuple[str, ...],
+        cwd: Path,
+        timeout: int | None = None,
+        stream: object | None = None,
     ) -> CommandResult:
         self.argv, self.timeout = argv, timeout
+        self.streaming = True
         return CommandResult(argv, cwd, 0, "https://github.com/me/repo/pull/8", "")
 
 
@@ -107,4 +133,8 @@ def test_pi_client_receives_only_rendered_prompt_and_typed_settings() -> None:
         "rendered task",
     )
     assert result.pull_request_url == "https://github.com/me/repo/pull/8"
+    assert result.session_id == "uuid"
+    assert result.session_name == "run-name"
+    assert result.resume_command == "pi --session uuid"
     assert process.timeout == 7200
+    assert process.streaming is True

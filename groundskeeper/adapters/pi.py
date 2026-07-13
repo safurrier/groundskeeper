@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import shutil
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -33,11 +34,20 @@ class PiClient:
         """Return whether the Pi executable is discoverable without invoking it."""
         return shutil.which("pi") is not None
 
+    def supports_automation(self) -> bool:
+        """Return whether the host can safely contain Pi's descendant processes."""
+        return self._process.supports_streaming_process_groups()
+
     def run_prompt(
         self, prompt: str, cwd: Path, settings: PiExecutionSettings
     ) -> WorkResult:
         """Run a rendered prompt with explicit, already-approved settings."""
-        result = self._process.run(
+        print(
+            f"[groundskeeper] pi start session={settings.session_id} name={settings.name}",
+            file=sys.stderr,
+            flush=True,
+        )
+        result = self._process.run_streaming(
             (
                 "pi",
                 "--session-id",
@@ -51,6 +61,11 @@ class PiClient:
             cwd,
             timeout=settings.timeout_seconds,
         )
+        print(
+            f"[groundskeeper] pi finish session={settings.session_id} exit={result.exit_code}",
+            file=sys.stderr,
+            flush=True,
+        )
         match = re.search(r"https://github\.com/[^\s]+/pull/\d+", result.stdout)
         return WorkResult(
             success=result.success,
@@ -58,4 +73,7 @@ class PiClient:
             error=result.stderr,
             exit_code=result.exit_code,
             pull_request_url=match.group(0) if match else None,
+            session_id=settings.session_id,
+            session_name=settings.name,
+            resume_command=f"pi --session {settings.session_id}",
         )

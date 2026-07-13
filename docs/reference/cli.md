@@ -36,7 +36,14 @@ selected-skill provenance (name, source kind, and path, never the prompt body).
 repository path, and the fixed draft-only/never-merge policy without contacting
 GitHub or starting work. `tick` runs one bounded reconciliation pass. Dry-run
 selects and reports eligible work without labels, comments, or worker launch.
-Its compact output omits issue bodies.
+Its compact output omits issue bodies. Pi child output is streamed to stderr so
+scheduler logs show progress without corrupting JSON stdout. Terminal review or
+blocked results expose `session_id`, `session_name`, and `resume_command` in the
+JSON `data` object. The generic resume command uses `pi`; callers with auth
+profiles can substitute their profile wrapper, such as `pih`. Pi automation
+requires POSIX process-group isolation; validation and live ticks reject
+unsupported hosts before tracker access, issue claim, or worker startup rather
+than risk descendants surviving after lock release.
 
 Pi runner configuration accepts optional `timeout-seconds` (default: 7,200) for
 long-running tasks. GitHub CLI calls use a fixed 30-second timeout. Groundskeeper

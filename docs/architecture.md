@@ -84,12 +84,16 @@ automation config
   → acquire stable host-state lock for normalized repository identity
   → reconcile running issues before selecting ready work
   → claim at most one trusted issue
-  → render configured skill + task/recovery/policy context
+  → render configured skill + task/recovery/policy/session context
+  → require POSIX process-group isolation
   → run Pi in a deterministic session with a bounded process group
+      combined child output → Groundskeeper stderr for live logs
+      buffered output → PR URL parsing and failure detail
   → reconcile GitHub as the durable result authority
       exact closing open draft PR → review
       non-draft, closed, or merged closing PR → blocked policy violation
       no accepted PR + worker failure → blocked worker error
+  → expose session id, stable name, and resume command in JSON + issue comment
 ```
 
 The workflow instructions belong to the configured skill; the Pi adapter knows
