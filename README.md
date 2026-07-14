@@ -24,6 +24,7 @@ automations:
       labels:
         ready: factory:ready
         running: factory:running
+        deferred: factory:deferred
         review: factory:review
         blocked: factory:blocked
     runner:
@@ -58,20 +59,36 @@ repository identity. Locks live under `$XDG_STATE_HOME/groundskeeper/locks`
 (or `~/.local/state/groundskeeper/locks`), so separate config worktrees for the
 same repository share one host lock. `GROUNDSKEEPER_STATE_HOME` is a narrow
 host/test override. Run exactly one scheduler host for each automation;
-multi-host scheduling is not supported. A successful no-work tick is safe. After
-any worker return, Groundskeeper first reconciles the accepted GitHub result: an
-open draft PR with the exact closing reference moves to review even if the worker
-reported a late failure. Otherwise, a failed worker moves the issue to
-`factory:blocked` with an actionable comment. The JSON contract is versioned,
+multi-host scheduling is not supported. A tick reconciles running work first,
+then atomically reclaims deferred work, then claims new ready work. A successful
+no-work tick is safe. After any worker return, Groundskeeper first reconciles the
+accepted GitHub result: an open draft PR with the exact closing reference moves
+to review even if the worker reported a late failure. Explicit Codex usage,
+provider rate-limit/HTTP 429, and temporary provider-capacity failures move the
+issue to `factory:deferred` with an actionable comment and are resumed on the
+next tick. Authentication, model configuration, policy, timeout, and ordinary
+worker failures move it to `factory:blocked`. The JSON contract is versioned,
 and dry-run output deliberately omits
 issue bodies. Set a scheduler's working directory to the repository containing
 `.groundskeeper/config.yml`, or pass `gk automation --config PATH ...`.
 
+The lifecycle is deliberately small and label-backed:
+
+```text
+factory:ready ──claim──> factory:running ──accepted draft PR──> factory:review
+                              │
+                              ├──transient provider exhaustion──> factory:deferred
+                              └──durable failure/policy violation──> factory:blocked
+
+factory:deferred ──next tick claim/resume──> factory:running
+```
+
 Each issue maps to a deterministic UUIDv5 Pi session and stable run name. Pi
 output streams to Groundskeeper's stderr for live scheduler logs while the final
-versioned JSON result remains on stdout. Review and blocked results include the
-session ID, name, and generic `pi --session ID` resume command; GitHub transition
-comments preserve the same handoff metadata. Streaming Pi automations require a
+versioned JSON result remains on stdout. Review, deferred, and blocked results
+include the session ID, name, and generic `pi --session ID` resume command;
+GitHub transition comments preserve the same handoff metadata. Streaming Pi
+automations require a
 POSIX host so Groundskeeper can terminate the complete process group before
 releasing repository locks; unsupported hosts fail before starting Pi.
 
@@ -80,8 +97,8 @@ seconds); GitHub CLI operations have fixed 30-second timeouts. After a timeout,
 Groundskeeper reconciles the same accepted GitHub result first; without one, it
 blocks the claimed issue with the command error and releases the host lock for retry.
 If a process exits after claiming an issue, the next tick resumes that session
-and reconciles GitHub state. Issue discovery requests ready/running labels
-server-side and is bounded at 1,000 open issues per state.
+and reconciles GitHub state. Issue discovery requests ready, running, and
+deferred labels server-side and is bounded at 1,000 open issues per state.
 
 Define AI agent skills as markdown prompt templates. Chain them into workflows. Run them locally or generate GitHub Actions workflows that run them on PRs or schedules.
 

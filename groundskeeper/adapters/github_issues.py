@@ -24,6 +24,9 @@ class GitHubIssuesTracker:
     def list_running(self) -> list[AutomationTask]:
         return self._list_in_state(self._source.running_label, TaskState.RUNNING)
 
+    def list_deferred(self) -> list[AutomationTask]:
+        return self._list_in_state(self._source.deferred_label, TaskState.DEFERRED)
+
     def _list_in_state(self, label: str, state: TaskState) -> list[AutomationTask]:
         issues = self._client.list_issues(self._source.repository, (label,))
         return [
@@ -42,15 +45,25 @@ class GitHubIssuesTracker:
         ]
 
     def claim(self, task: AutomationTask) -> ClaimResult:
-        # Re-read ready tasks immediately before mutation. This makes retries safe and
-        # narrows the race between independent scheduled ticks.
-        current = {item.external_id for item in self.list_ready()}
+        # Re-read the selected queue immediately before the single label mutation.
+        # This makes retries safe and narrows the race between scheduled ticks.
+        queues = {
+            TaskState.READY: (self.list_ready, self._source.ready_label),
+            TaskState.DEFERRED: (self.list_deferred, self._source.deferred_label),
+        }
+        queue = queues.get(task.state)
+        if queue is None:
+            return ClaimResult(
+                False, task, f"task cannot be claimed from {task.state.value}"
+            )
+        list_tasks, source_label = queue
+        current = {item.external_id for item in list_tasks()}
         if task.external_id not in current:
-            return ClaimResult(False, task, "task is no longer ready")
+            return ClaimResult(False, task, f"task is no longer {task.state.value}")
         self._client.replace_label(
             self._source.repository,
             int(task.external_id),
-            self._source.ready_label,
+            source_label,
             self._source.running_label,
         )
         return ClaimResult(True, replace(task, state=TaskState.RUNNING))
@@ -61,12 +74,14 @@ class GitHubIssuesTracker:
         target = {
             TaskState.REVIEW: self._source.review_label,
             TaskState.BLOCKED: self._source.blocked_label,
+            TaskState.DEFERRED: self._source.deferred_label,
             TaskState.RUNNING: self._source.running_label,
             TaskState.READY: self._source.ready_label,
         }[state]
         old = {
             TaskState.READY: self._source.ready_label,
             TaskState.RUNNING: self._source.running_label,
+            TaskState.DEFERRED: self._source.deferred_label,
             TaskState.REVIEW: self._source.review_label,
             TaskState.BLOCKED: self._source.blocked_label,
         }[task.state]

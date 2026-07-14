@@ -8,7 +8,7 @@ from click.testing import CliRunner
 
 from groundskeeper.adapters.tick_lock import TickAlreadyRunningError
 from groundskeeper.cli.main import _automation_lock_path, cli
-from groundskeeper.domain.automation import AutomationTask, TickResult
+from groundskeeper.domain.automation import AutomationTask, TaskState, TickResult
 from groundskeeper.domain.config import get_automations
 
 CONFIG = """
@@ -83,6 +83,7 @@ def test_automation_show_and_validate_use_versioned_envelopes(
     shown = json.loads(show.output)["data"]["automation"]
     assert shown["name"] == "daily-dev"
     assert shown["repository_path"] == str(Path("/tmp").resolve())
+    assert shown["labels"]["deferred"] == "factory:deferred"
     assert shown["labels"]["review"] == "factory:review"
     assert shown["runner"]["timeout_seconds"] == 7200
     assert shown["skill"] == {
@@ -265,6 +266,44 @@ def test_blocked_result_has_stable_exit_code(
         result = runner.invoke(cli, ["automation", "tick", "daily-dev", "--json"])
     assert result.exit_code == 5
     assert json.loads(result.output)["status"] == "blocked"
+
+
+@patch("groundskeeper.cli.main.PiClient.is_available", return_value=True)
+@patch("groundskeeper.cli.main.AutomationService.tick")
+def test_deferred_result_is_structured_and_nonfatal(
+    mock_tick: object, mock_available: object, tmp_path: Path
+) -> None:
+    task = AutomationTask(
+        "github",
+        "7",
+        "Do work",
+        "body",
+        "https://github.com/me/dots/issues/7",
+        "alex",
+        "me/dots",
+        TaskState.DEFERRED,
+    )
+    mock_tick.return_value = TickResult(  # type: ignore[attr-defined]
+        "daily-dev",
+        "deferred",
+        task=task,
+        detail="provider exhausted; retry next tick",
+        session_id="session-123",
+        session_name="gk-me-dots-7",
+        resume_command="pi --session session-123",
+    )
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        Path(".groundskeeper").mkdir(exist_ok=True)
+        Path(".groundskeeper/config.yml").write_text(CONFIG)
+        result = runner.invoke(cli, ["automation", "tick", "daily-dev", "--json"])
+
+    payload = json.loads(result.output)
+    assert result.exit_code == 0
+    assert payload["status"] == "deferred"
+    assert payload["exit_code"] == 0
+    assert payload["data"]["resume_command"] == "pi --session session-123"
+    assert payload["data"]["task"]["state"] == "deferred"
 
 
 @patch("groundskeeper.cli.main.PiClient.is_available", return_value=True)

@@ -31,11 +31,31 @@ user-authorized Pi process. An automation skill receives normalized `TASK_ID`,
 `POLICY_CONCURRENCY`, `POLICY_OUTPUT`, and `POLICY_MERGE`; ordinary skill
 rendering is unchanged.
 
+A GitHub issue source has five distinct lifecycle labels. Defaults are shown
+below; every override must be a non-empty string and all five must be distinct:
+
+```yaml
+source:
+  type: github-issues
+  repository: example/widgets
+  repository-path: /srv/widgets
+  trusted-authors: [maintainer]
+  labels:
+    ready: factory:ready
+    running: factory:running
+    deferred: factory:deferred
+    review: factory:review
+    blocked: factory:blocked
+```
+
 Pi runners accept optional positive `timeout-seconds` (default: `7200`) for
 long-running development work. GitHub CLI operations use a fixed 30-second
 timeout. After any worker return, Groundskeeper first reconciles the accepted
-open-draft closing PR; only when that result is absent does a Pi timeout become
-a blocked task with its actionable command error. The host lock is released when
+open-draft closing PR. Explicit Codex usage-limit, rate-limit/HTTP 429, and
+temporary provider-capacity failures then move running work to deferred for a
+deterministic-session resume on the next tick. Authentication, missing or
+misconfigured models, policy failures, ordinary worker failures, and Pi timeouts
+remain blocked. The host lock is released when
 the tick exits. Automation entries are strict:
 unknown keys are rejected at the entry, source, runner, policy, and labels
 levels. For example, use `timeout-seconds`, not `timeout_seconds`, and

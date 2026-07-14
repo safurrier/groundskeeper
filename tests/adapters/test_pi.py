@@ -1,12 +1,28 @@
+import io
+import sys
 from pathlib import Path
+
+import pytest
 
 from groundskeeper.adapters.automation_runner import (
     AutomationSkillRenderer,
     PiAutomationRunner,
 )
-from groundskeeper.adapters.pi import PiClient, PiExecutionSettings
-from groundskeeper.adapters.process import CommandResult
-from groundskeeper.domain.automation import AutomationTask, WorkResult
+from groundskeeper.adapters.pi import (
+    PiClient,
+    PiExecutionSettings,
+    _failure_disposition,
+)
+from groundskeeper.adapters.process import (
+    PROCESS_ERROR_TAIL_CHARS,
+    CommandResult,
+    ProcessClient,
+)
+from groundskeeper.domain.automation import (
+    AutomationTask,
+    FailureDisposition,
+    WorkResult,
+)
 from groundskeeper.domain.config import AutomationPolicy, PiRunnerConfig
 from groundskeeper.domain.models import Skill, SkillSource
 
@@ -101,10 +117,11 @@ def test_recovery_reuses_deterministic_session_and_changes_only_context() -> Non
 
 
 class FakeProcess:
-    def __init__(self) -> None:
+    def __init__(self, result: CommandResult | None = None) -> None:
         self.argv: tuple[str, ...] = ()
         self.timeout: int | None = None
         self.streaming = False
+        self.result = result
 
     def run_streaming(
         self,
@@ -115,7 +132,9 @@ class FakeProcess:
     ) -> CommandResult:
         self.argv, self.timeout = argv, timeout
         self.streaming = True
-        return CommandResult(argv, cwd, 0, "https://github.com/me/repo/pull/8", "")
+        return self.result or CommandResult(
+            argv, cwd, 0, "https://github.com/me/repo/pull/8", ""
+        )
 
 
 def test_pi_client_receives_only_rendered_prompt_and_typed_settings() -> None:
@@ -138,3 +157,151 @@ def test_pi_client_receives_only_rendered_prompt_and_typed_settings() -> None:
     assert result.resume_command == "pi --session uuid"
     assert process.timeout == 7200
     assert process.streaming is True
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        "Codex usage limit reached. Try again after 4:00 PM.",
+        "You've hit your usage limit. Try again at 4:00 PM.",
+        "Rate limit exceeded for provider; retry later",
+        "HTTP 429 Too Many Requests",
+        "API Error: 429; retry later",
+        "The provider is temporarily at capacity. Please try again later.",
+    ],
+)
+def test_pi_client_classifies_explicit_provider_exhaustion_as_deferred(
+    error: str,
+) -> None:
+    process = FakeProcess(CommandResult((), Path("/repo"), 1, "", error))
+
+    result = PiClient(process).run_prompt(  # type: ignore[arg-type]
+        "rendered task", Path("/repo"), PiExecutionSettings("uuid", "run-name")
+    )
+
+    assert not result.success
+    assert result.failure_disposition is FailureDisposition.DEFERRED
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        "No API key found for openai-codex. Use /login.",
+        "Authentication failed: 401 Unauthorized",
+        "Access forbidden (HTTP 403)",
+        "Model gpt-missing was not found",
+        "Unknown model gpt-missing",
+        "Invalid model selection",
+        "The configured model is unavailable for this account",
+        "Request rejected by organization policy",
+        "Request blocked by policy",
+        "Provider policy violation",
+        "worker failed while editing tests",
+        "command timed out after 7200 seconds: pi",
+    ],
+)
+def test_pi_client_keeps_auth_model_policy_worker_and_timeout_failures_blocked(
+    error: str,
+) -> None:
+    process = FakeProcess(CommandResult((), Path("/repo"), 1, "", error))
+
+    result = PiClient(process).run_prompt(  # type: ignore[arg-type]
+        "rendered task", Path("/repo"), PiExecutionSettings("uuid", "run-name")
+    )
+
+    assert not result.success
+    assert result.failure_disposition is FailureDisposition.BLOCKED
+
+
+def test_streaming_boundary_does_not_classify_transient_worker_stdout(
+    tmp_path: Path,
+) -> None:
+    process_result = ProcessClient().run_streaming(
+        (
+            sys.executable,
+            "-c",
+            "import sys; "
+            "print('Added a test for HTTP 429 Too Many Requests'); "
+            "print('ordinary worker failure', file=sys.stderr); "
+            "raise SystemExit(1)",
+        ),
+        tmp_path,
+        stream=io.StringIO(),
+    )
+
+    assert "HTTP 429" in process_result.stdout
+    assert "HTTP 429" not in process_result.stderr
+    assert _failure_disposition(process_result.stderr, process_result.exit_code) is (
+        FailureDisposition.BLOCKED
+    )
+
+
+def test_pi_client_ignores_transient_text_in_worker_output() -> None:
+    process = FakeProcess(
+        CommandResult(
+            (),
+            Path("/repo"),
+            1,
+            "Added a test for HTTP 429 Too Many Requests",
+            "worker failed while editing tests",
+        )
+    )
+
+    result = PiClient(process).run_prompt(  # type: ignore[arg-type]
+        "rendered task", Path("/repo"), PiExecutionSettings("uuid", "run-name")
+    )
+
+    assert result.failure_disposition is FailureDisposition.BLOCKED
+
+
+def test_pi_client_prioritizes_durable_diagnostic_over_transient_text() -> None:
+    process = FakeProcess(
+        CommandResult(
+            (),
+            Path("/repo"),
+            1,
+            "",
+            "Codex usage limit reached, but no API key found for openai-codex",
+        )
+    )
+
+    result = PiClient(process).run_prompt(  # type: ignore[arg-type]
+        "rendered task", Path("/repo"), PiExecutionSettings("uuid", "run-name")
+    )
+
+    assert result.failure_disposition is FailureDisposition.BLOCKED
+
+
+def test_pi_client_classifies_full_stderr_before_display_tail_truncation() -> None:
+    full_error = (
+        "Authentication failed: 401 Unauthorized\n"
+        + ("diagnostic filler\n" * 700)
+        + "HTTP 429 Too Many Requests"
+    )
+    process = FakeProcess(CommandResult((), Path("/repo"), 1, "", full_error))
+
+    result = PiClient(process).run_prompt(  # type: ignore[arg-type]
+        "rendered task", Path("/repo"), PiExecutionSettings("uuid", "run-name")
+    )
+
+    assert result.failure_disposition is FailureDisposition.BLOCKED
+    assert len(result.error) <= PROCESS_ERROR_TAIL_CHARS
+    assert "HTTP 429" in result.error
+
+
+def test_pi_client_keeps_timeout_blocked_even_after_transient_output() -> None:
+    process = FakeProcess(
+        CommandResult(
+            (),
+            Path("/repo"),
+            124,
+            "Codex usage limit reached",
+            "command timed out after 7200 seconds: pi",
+        )
+    )
+
+    result = PiClient(process).run_prompt(  # type: ignore[arg-type]
+        "rendered task", Path("/repo"), PiExecutionSettings("uuid", "run-name")
+    )
+
+    assert result.failure_disposition is FailureDisposition.BLOCKED

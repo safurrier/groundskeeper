@@ -157,6 +157,7 @@ def _automation_summary(
         "labels": {
             "ready": item.source.ready_label,
             "running": item.source.running_label,
+            "deferred": item.source.deferred_label,
             "review": item.source.review_label,
             "blocked": item.source.blocked_label,
         },
@@ -412,7 +413,7 @@ Examples:
   gk automation tick daily-dev --dry-run --json
   gk automation tick daily-dev --json
 
-Exit codes: 0 complete/no work, 2 configuration or runner error,
+Exit codes: 0 complete/no work/deferred, 2 configuration or runner error,
 4 claim contention, 5 blocked worker.
 """,
 )
@@ -470,6 +471,7 @@ def automation_tick(
     exit_code = {
         "no-work": 0,
         "review": 0,
+        "deferred": 0,
         "would-dispatch": 0,
         "would-resume": 0,
         "not-claimed": 4,
