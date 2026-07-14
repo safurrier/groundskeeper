@@ -137,6 +137,7 @@ class GitHubIssuesSource:
     running_label: str = "factory:running"
     review_label: str = "factory:review"
     blocked_label: str = "factory:blocked"
+    deferred_label: str = "factory:deferred"
 
 
 @dataclass(frozen=True)
@@ -436,6 +437,7 @@ def get_automations(config: Mapping[str, object]) -> list[Automation]:
         label_defaults = {
             "ready": "factory:ready",
             "running": "factory:running",
+            "deferred": "factory:deferred",
             "review": "factory:review",
             "blocked": "factory:blocked",
         }
@@ -468,6 +470,7 @@ def get_automations(config: Mapping[str, object]) -> list[Automation]:
                     running_label=resolved_labels["running"],
                     review_label=resolved_labels["review"],
                     blocked_label=resolved_labels["blocked"],
+                    deferred_label=resolved_labels["deferred"],
                 ),
                 runner=PiRunnerConfig(skill=skill, timeout_seconds=timeout_seconds),
                 policy=AutomationPolicy(),

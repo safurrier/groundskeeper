@@ -27,7 +27,7 @@ def test_streaming_process_fails_closed_without_process_groups(tmp_path: Path) -
     assert result.stdout == ""
 
 
-def test_streaming_process_tees_combined_output_and_preserves_result(
+def test_streaming_process_tees_separate_output_and_preserves_result(
     tmp_path: Path,
 ) -> None:
     destination = io.StringIO()
@@ -43,9 +43,10 @@ def test_streaming_process_tees_combined_output_and_preserves_result(
 
     assert result.success
     assert "stdout milestone" in result.stdout
-    assert "stderr milestone" in result.stdout
-    assert result.stderr == ""
-    assert destination.getvalue() == result.stdout
+    assert "stderr milestone" not in result.stdout
+    assert "stderr milestone" in result.stderr
+    assert "stdout milestone" in destination.getvalue()
+    assert "stderr milestone" in destination.getvalue()
 
 
 def test_streaming_process_failure_keeps_output_as_error_detail(tmp_path: Path) -> None:
@@ -58,24 +59,27 @@ def test_streaming_process_failure_keeps_output_as_error_detail(tmp_path: Path) 
     )
 
     assert result.exit_code == 3
-    assert result.stderr == result.stdout
-    assert "failed detail" in result.stderr
+    assert "failed detail" in result.stdout
+    assert result.stderr == ""
 
 
-def test_streaming_process_failure_caps_error_detail(tmp_path: Path) -> None:
+def test_streaming_process_preserves_full_stderr_for_classification(
+    tmp_path: Path,
+) -> None:
     result = ProcessClient().run_streaming(
         (
             sys.executable,
             "-c",
-            f"print('x' * {PROCESS_ERROR_TAIL_CHARS + 200}); raise SystemExit(3)",
+            "import sys; "
+            f"print('x' * {PROCESS_ERROR_TAIL_CHARS + 200}, file=sys.stderr); "
+            "raise SystemExit(3)",
         ),
         tmp_path,
         stream=io.StringIO(),
     )
 
-    assert len(result.stdout) > PROCESS_ERROR_TAIL_CHARS
-    assert len(result.stderr) == PROCESS_ERROR_TAIL_CHARS
-    assert result.stderr == result.stdout[-PROCESS_ERROR_TAIL_CHARS:]
+    assert result.stdout == ""
+    assert len(result.stderr) > PROCESS_ERROR_TAIL_CHARS
 
 
 @pytest.mark.skipif(os.name != "posix", reason="process groups require POSIX")

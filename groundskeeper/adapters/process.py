@@ -33,15 +33,19 @@ class CommandResult:
 
 
 def _drain_process_output(
-    process: subprocess.Popen[str], destination: TextIO, chunks: list[str]
+    source: TextIO | None,
+    destination: TextIO,
+    chunks: list[str],
+    stream_lock: threading.Lock,
 ) -> None:
-    """Copy merged process output to both an in-memory buffer and a live stream."""
-    if process.stdout is None:
+    """Copy one child stream to an in-memory buffer and the shared live stream."""
+    if source is None:
         return
-    for chunk in process.stdout:
+    for chunk in source:
         chunks.append(chunk)
-        destination.write(chunk)
-        destination.flush()
+        with stream_lock:
+            destination.write(chunk)
+            destination.flush()
 
 
 class ProcessClient:
@@ -94,7 +98,7 @@ class ProcessClient:
         timeout: int | None = None,
         stream: TextIO | None = None,
     ) -> CommandResult:
-        """Tee combined child output to a stream while preserving it for parsing."""
+        """Tee both child streams live while preserving stdout and stderr separately."""
         if not STREAMING_PROCESS_GROUPS_SUPPORTED:
             return CommandResult(
                 argv,
@@ -109,7 +113,7 @@ class ProcessClient:
                 argv,
                 cwd=cwd,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
+                stderr=subprocess.PIPE,
                 text=True,
                 bufsize=1,
                 start_new_session=os.name == "posix",
@@ -121,13 +125,23 @@ class ProcessClient:
                 argv, cwd, 126, "", f"could not run {argv[0]}: {error}"
             )
 
-        chunks: list[str] = []
-        reader = threading.Thread(
-            target=_drain_process_output,
-            args=(process, destination, chunks),
-            daemon=True,
-        )
-        reader.start()
+        stdout_chunks: list[str] = []
+        stderr_chunks: list[str] = []
+        stream_lock = threading.Lock()
+        readers = [
+            threading.Thread(
+                target=_drain_process_output,
+                args=(process.stdout, destination, stdout_chunks, stream_lock),
+                daemon=True,
+            ),
+            threading.Thread(
+                target=_drain_process_output,
+                args=(process.stderr, destination, stderr_chunks, stream_lock),
+                daemon=True,
+            ),
+        ]
+        for reader in readers:
+            reader.start()
         deadline = time.monotonic() + timeout if timeout is not None else None
         timed_out = False
         try:
@@ -137,26 +151,30 @@ class ProcessClient:
             self._terminate_process_tree(process, drain_pipes=False)
 
         if not timed_out:
-            if deadline is None:
-                reader.join()
-            else:
-                reader.join(timeout=max(0.0, deadline - time.monotonic()))
-                if reader.is_alive():
-                    timed_out = True
-                    self._terminate_process_tree(process, drain_pipes=False)
+            for reader in readers:
+                if deadline is None:
+                    reader.join()
+                else:
+                    reader.join(timeout=max(0.0, deadline - time.monotonic()))
+                    if reader.is_alive():
+                        timed_out = True
+                        self._terminate_process_tree(process, drain_pipes=False)
+                        break
         if timed_out:
-            reader.join(timeout=PROCESS_TERMINATION_GRACE_SECONDS)
-        combined = "".join(chunks)
+            for reader in readers:
+                reader.join(timeout=PROCESS_TERMINATION_GRACE_SECONDS)
+        stdout = "".join(stdout_chunks)
+        stderr = "".join(stderr_chunks)
         if timed_out:
             detail = f" after {timeout} seconds" if timeout is not None else ""
             error = f"command timed out{detail}: {argv[0]}"
-            return CommandResult(argv, cwd, 124, combined, error)
+            return CommandResult(argv, cwd, 124, stdout, error)
         return CommandResult(
             argv=argv,
             cwd=cwd,
             exit_code=process.returncode,
-            stdout=combined,
-            stderr=combined[-PROCESS_ERROR_TAIL_CHARS:] if process.returncode else "",
+            stdout=stdout,
+            stderr=stderr,
         )
 
     @staticmethod

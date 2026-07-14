@@ -34,6 +34,7 @@ def test_parses_github_pi_automation() -> None:
     )
     assert items[0].source.repository_path == Path("/tmp/dots").resolve()
     assert items[0].source.trusted_authors == ("me",)
+    assert items[0].source.deferred_label == "factory:deferred"
     assert items[0].runner.skill == "issue-implementation"
     assert items[0].runner.approval == "allow"
     assert items[0].runner.session == "deterministic"
@@ -220,6 +221,7 @@ def test_rejects_relative_repository_path() -> None:
         {"ready": ""},
         {"ready": None},
         {"ready": "factory:shared", "running": "factory:shared"},
+        {"running": "factory:shared", "deferred": "factory:shared"},
         {"unexpected": "factory:other"},
     ],
 )
@@ -246,6 +248,17 @@ def test_rejects_invalid_lifecycle_labels(labels: dict[str, object]) -> None:
                 }
             }
         )
+
+
+def test_parses_custom_deferred_label() -> None:
+    config = _valid_automation_config()
+    config["automations"]["daily"]["source"]["labels"] = {  # type: ignore[index]
+        "deferred": "queue:retry-later"
+    }
+
+    automation = get_automations(config)[0]
+
+    assert automation.source.deferred_label == "queue:retry-later"
 
 
 @pytest.mark.parametrize(

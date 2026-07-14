@@ -11,6 +11,7 @@ class TaskState(str, Enum):
 
     READY = "ready"
     RUNNING = "running"
+    DEFERRED = "deferred"
     REVIEW = "review"
     BLOCKED = "blocked"
 
@@ -47,6 +48,13 @@ class SessionMetadata:
     resume_command: str
 
 
+class FailureDisposition(str, Enum):
+    """Typed lifecycle disposition for an unsuccessful worker result."""
+
+    BLOCKED = "blocked"
+    DEFERRED = "deferred"
+
+
 @dataclass(frozen=True)
 class WorkResult:
     """Result returned by an automation worker."""
@@ -59,6 +67,7 @@ class WorkResult:
     session_id: str | None = None
     session_name: str | None = None
     resume_command: str | None = None
+    failure_disposition: FailureDisposition = FailureDisposition.BLOCKED
 
 
 @dataclass(frozen=True)

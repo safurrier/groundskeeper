@@ -37,9 +37,11 @@ repository path, and the fixed draft-only/never-merge policy without contacting
 GitHub or starting work. `tick` runs one bounded reconciliation pass. Dry-run
 selects and reports eligible work without labels, comments, or worker launch.
 Its compact output omits issue bodies. Pi child output is streamed to stderr so
-scheduler logs show progress without corrupting JSON stdout. Terminal review or
-blocked results expose `session_id`, `session_name`, and `resume_command` in the
-JSON `data` object. The generic resume command uses `pi`; callers with auth
+scheduler logs show progress without corrupting JSON stdout. Review, deferred,
+and blocked results expose `session_id`, `session_name`, and `resume_command` in
+the JSON `data` object. A deferred result means Pi reported an explicit transient
+provider exhaustion signal and the deterministic session will be reclaimed on a
+later tick. The generic resume command uses `pi`; callers with auth
 profiles can substitute their profile wrapper, such as `pih`. Pi automation
 requires POSIX process-group isolation; validation and live ticks reject
 unsupported hosts before tracker access, issue claim, or worker startup rather
@@ -53,9 +55,12 @@ with the exact closing reference.
 
 All JSON responses use a versioned envelope:
 `{"version":1,"status":"...","data":{...},"exit_code":N}`. Exit `0` means
-no work, review-ready work, or a successful dry-run. Exit `2` is a configuration,
-command, tracker, or lock error; `4` is claim contention; and `5` is a blocked
-worker. Commands are noninteractive and ticks use a single-host advisory lock.
+no work, review-ready work, deferred work, or a successful dry-run. In
+particular, `status: "deferred"` is a nonfatal scheduler result. Exit `2` is a
+configuration, command, tracker, or lock error; `4` is claim contention; and `5`
+is a blocked worker. Commands are noninteractive and ticks use a single-host
+advisory lock. Tick selection order is running, deferred, then ready; deferred
+work is claimed back to running before a recovery invocation.
 
 ## `gk init`
 

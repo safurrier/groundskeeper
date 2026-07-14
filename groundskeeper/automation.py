@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from groundskeeper.domain.automation import (
     AutomationTask,
+    FailureDisposition,
     SessionMetadata,
     TaskState,
     TickResult,
@@ -64,28 +67,41 @@ class AutomationService:
             return self._finish(
                 automation.name, task, self._runner.run(task, recovery=True)
             )
-        tasks = self._tracker.list_ready()
-        if not tasks:
+        deferred = self._tracker.list_deferred()
+        if deferred:
+            task = deferred[0]
+            if dry_run:
+                return TickResult(automation.name, "would-resume", task)
+            return self._claim_and_run(automation.name, task, recovery=True)
+
+        ready = self._tracker.list_ready()
+        if not ready:
             return TickResult(automation.name, "no-work")
-        task = tasks[0]
+        task = ready[0]
         if dry_run:
             return TickResult(automation.name, "would-dispatch", task)
+        return self._claim_and_run(automation.name, task, recovery=False)
+
+    def _claim_and_run(
+        self, name: str, task: AutomationTask, recovery: bool
+    ) -> TickResult:
+        """Atomically admit queued work before starting or resuming its session."""
         claim = self._tracker.claim(task)
         if not claim.claimed:
-            return TickResult(automation.name, "not-claimed", task, detail=claim.reason)
+            return TickResult(name, "not-claimed", task, detail=claim.reason)
         try:
             existing_pr = self._tracker.find_pull_request(claim.task)
         except RuntimeError as error:
-            return self._block(automation.name, claim.task, str(error))
+            return self._block(name, claim.task, str(error))
         if existing_pr:
             return self._review(
-                automation.name,
+                name,
                 claim.task,
                 existing_pr,
                 _work_result_for_session(self._runner.session_metadata(claim.task)),
             )
-        result = self._runner.run(claim.task)
-        return self._finish(automation.name, claim.task, result)
+        result = self._runner.run(claim.task, recovery=recovery)
+        return self._finish(name, claim.task, result)
 
     def _finish(
         self, name: str, task: AutomationTask, result: WorkResult
@@ -103,6 +119,8 @@ class AutomationService:
             return self._block(name, task, violation, result)
         if not result.success:
             detail = result.error.strip() or f"worker exited {result.exit_code}"
+            if result.failure_disposition is FailureDisposition.DEFERRED:
+                return self._defer(name, task, detail, result)
             return self._block(name, task, detail, result)
         return self._block(
             name,
@@ -124,12 +142,36 @@ class AutomationService:
         return TickResult(
             name,
             "review",
-            task,
+            replace(task, state=TaskState.REVIEW),
             pull_request_url,
             detail,
             result.session_id,
             result.session_name,
             result.resume_command,
+        )
+
+    def _defer(
+        self,
+        name: str,
+        task: AutomationTask,
+        detail: str,
+        result: WorkResult,
+    ) -> TickResult:
+        """Return transient provider exhaustion to the resumable queue."""
+        actionable = (
+            "Transient provider exhaustion; Groundskeeper will resume this "
+            f"deterministic session on the next tick.\n\n{detail}"
+        )
+        rendered = _result_detail(actionable, result)
+        self._tracker.transition(task, TaskState.DEFERRED, rendered)
+        return TickResult(
+            name,
+            "deferred",
+            replace(task, state=TaskState.DEFERRED),
+            detail=rendered,
+            session_id=result.session_id,
+            session_name=result.session_name,
+            resume_command=result.resume_command,
         )
 
     def _block(
@@ -145,7 +187,7 @@ class AutomationService:
         return TickResult(
             name,
             "blocked",
-            task,
+            replace(task, state=TaskState.BLOCKED),
             detail=rendered,
             session_id=result.session_id if result else None,
             session_name=result.session_name if result else None,

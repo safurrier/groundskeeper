@@ -82,8 +82,8 @@ automation config
   → strict source, runner, labels, timeout, and policy parsing
   → resolve configured skill with provenance
   → acquire stable host-state lock for normalized repository identity
-  → reconcile running issues before selecting ready work
-  → claim at most one trusted issue
+  → reconcile running issues before deferred work before ready work
+  → atomically claim at most one trusted deferred or ready issue
   → render configured skill + task/recovery/policy/session context
   → require POSIX process-group isolation
   → run Pi in a deterministic session with a bounded process group
@@ -92,9 +92,23 @@ automation config
   → reconcile GitHub as the durable result authority
       exact closing open draft PR → review
       non-draft, closed, or merged closing PR → blocked policy violation
-      no accepted PR + worker failure → blocked worker error
+      no accepted PR + explicit transient provider exhaustion → deferred
+      no accepted PR + durable/ordinary worker failure → blocked worker error
   → expose session id, stable name, and resume command in JSON + issue comment
 ```
+
+```text
+ready ──claim──> running ──accepted draft PR──> review
+                   │
+                   ├──Codex usage/rate/capacity exhaustion──> deferred
+                   └──auth/model/policy/worker/timeout────────> blocked
+
+deferred ──next tick claim + recovery──> running
+```
+
+Deferred claims return the issue to `running` before Pi resumes the same UUIDv5
+session. A repeat transient failure returns it to `deferred`; a later accepted
+draft PR reaches `review`.
 
 The workflow instructions belong to the configured skill; the Pi adapter knows
 only how to execute a rendered prompt. `merge: never` is an accepted-result

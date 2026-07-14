@@ -85,6 +85,58 @@ def _factory_flow_repo(
     return repo, env
 
 
+def _deferred_factory_repo(tmp_path: Path) -> tuple[Path, dict[str, str], Path, Path]:
+    repo, env = _factory_repo(tmp_path, "[]")
+    binary_dir = tmp_path / "bin"
+    state = tmp_path / "issue-state"
+    state.write_text("ready")
+    gh_log = tmp_path / "deferred-gh.log"
+    pi_log = tmp_path / "deferred-pi.log"
+    attempts = tmp_path / "pi-attempts"
+    attempts.write_text("0")
+    pr_created = tmp_path / "pr-created"
+    issue_prefix = (
+        '[{"number":7,"title":"Do work","body":"Acceptance",'
+        '"url":"https://github.com/me/repo/issues/7",'
+        '"author":{"login":"alex"},"labels":[{"name":"factory:'
+    )
+    (binary_dir / "gh").write_text(
+        "#!/bin/sh\n"
+        f"STATE='{state}'\nLOG='{gh_log}'\nCURRENT=$(cat \"$STATE\")\n"
+        'case "$*" in\n'
+        '  *"issue list"*)\n'
+        '    case "$*" in *"factory:$CURRENT"*) '
+        f"printf '%s%s%s' '{issue_prefix}' \"$CURRENT\" '"
+        + '"}]}]'
+        + "' ;; *) printf '%s' '[]' ;; esac ;;\n"
+        '  *"issue edit"*"factory:ready"*"factory:running"*) '
+        'echo \'ready->running\' >> "$LOG"; echo running > "$STATE" ;;\n'
+        '  *"issue edit"*"factory:deferred"*"factory:running"*) '
+        'echo \'deferred->running\' >> "$LOG"; echo running > "$STATE" ;;\n'
+        '  *"issue edit"*"factory:running"*"factory:deferred"*) '
+        'echo \'running->deferred\' >> "$LOG"; echo deferred > "$STATE" ;;\n'
+        '  *"issue edit"*"factory:running"*"factory:review"*) '
+        'echo \'running->review\' >> "$LOG"; echo review > "$STATE" ;;\n'
+        '  *"issue comment"*) echo \'comment\' >> "$LOG" ;;\n'
+        f"  *\"pr list\"*) if [ -f '{pr_created}' ]; then "
+        'printf \'%s\' \'[{"url":"https://github.com/me/repo/pull/9",'
+        '"isDraft":true,"closingIssuesReferences":[{"number":7}]}]\'; '
+        "else printf '%s' '[]'; fi ;;\n"
+        "esac\n"
+    )
+    pi = binary_dir / "pi"
+    pi.write_text(
+        "#!/bin/sh\n"
+        f"echo \"$*\" >> '{pi_log}'\n"
+        f"COUNT=$(cat '{attempts}')\nCOUNT=$((COUNT + 1))\necho $COUNT > '{attempts}'\n"
+        f"if [ \"$COUNT\" -lt 3 ]; then echo 'Codex usage limit reached; retry later' >&2; exit 1; fi\n"
+        f"touch '{pr_created}'\n"
+        "printf '%s' 'https://github.com/me/repo/pull/9'\n"
+    )
+    pi.chmod(0o755)
+    return repo, env, gh_log, pi_log
+
+
 def _stateful_factory_repo(tmp_path: Path) -> tuple[Path, dict[str, str], Path, Path]:
     repo, env = _factory_repo(tmp_path, "[]")
     binary_dir = tmp_path / "bin"
@@ -200,6 +252,53 @@ class TestAutomationE2E:
         result = run_gk("automation", "tick", "daily", "--json", cwd=repo, env=env)
         assert result.returncode == 0
         assert json.loads(result.stdout)["status"] == "review"
+
+    def test_transient_failure_defers_retries_and_eventually_reaches_review(
+        self, tmp_path: Path
+    ) -> None:
+        repo, env, gh_log, pi_log = _deferred_factory_repo(tmp_path)
+
+        first = run_gk("automation", "tick", "daily", "--json", cwd=repo, env=env)
+        second = run_gk("automation", "tick", "daily", "--json", cwd=repo, env=env)
+        third = run_gk("automation", "tick", "daily", "--json", cwd=repo, env=env)
+
+        first_payload = json.loads(first.stdout)
+        second_payload = json.loads(second.stdout)
+        third_payload = json.loads(third.stdout)
+        assert first.returncode == second.returncode == third.returncode == 0
+        assert [
+            first_payload["status"],
+            second_payload["status"],
+            third_payload["status"],
+        ] == [
+            "deferred",
+            "deferred",
+            "review",
+        ]
+        assert (
+            first_payload["data"]["session_id"] == second_payload["data"]["session_id"]
+        )
+        assert (
+            second_payload["data"]["session_id"] == third_payload["data"]["session_id"]
+        )
+        assert first_payload["data"]["resume_command"].startswith("pi --session ")
+        assert first_payload["data"]["task"]["state"] == "deferred"
+        assert second_payload["data"]["task"]["state"] == "deferred"
+        assert third_payload["data"]["task"]["state"] == "review"
+        assert gh_log.read_text().splitlines() == [
+            "ready->running",
+            "running->deferred",
+            "comment",
+            "deferred->running",
+            "running->deferred",
+            "comment",
+            "deferred->running",
+            "running->review",
+            "comment",
+        ]
+        pi_calls = pi_log.read_text()
+        assert pi_calls.count("--session-id ") == 3
+        assert pi_calls.count("RECOVERY_CONTEXT: Resume the deterministic session") == 2
 
     def test_crash_after_claim_resumes_same_session_without_second_claim(
         self, tmp_path: Path
