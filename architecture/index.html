@@ -716,8 +716,8 @@ adapters provide typed semantic operations and bounded timeouts above it.</p>
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>  → strict source, runner, labels, timeout, and policy parsing
 <a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>  → resolve configured skill with provenance
 <a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>  → acquire stable host-state lock for normalized repository identity
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>  → reconcile running issues before selecting ready work
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>  → claim at most one trusted issue
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>  → reconcile running issues before deferred work before ready work
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>  → atomically claim at most one trusted deferred or ready issue
 <a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>  → render configured skill + task/recovery/policy/session context
 <a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>  → require POSIX process-group isolation
 <a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>  → run Pi in a deterministic session with a bounded process group
@@ -726,24 +726,35 @@ adapters provide typed semantic operations and bounded timeouts above it.</p>
 <a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>  → reconcile GitHub as the durable result authority
 <a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>      exact closing open draft PR → review
 <a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>      non-draft, closed, or merged closing PR → blocked policy violation
-<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>      no accepted PR + worker failure → blocked worker error
-<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a>  → expose session id, stable name, and resume command in JSON + issue comment
+<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>      no accepted PR + explicit transient provider exhaustion → deferred
+<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a>      no accepted PR + durable/ordinary worker failure → blocked worker error
+<a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a>  → expose session id, stable name, and resume command in JSON + issue comment
 </code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>ready ──claim──&gt; running ──accepted draft PR──&gt; review
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>                   │
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>                   ├──Codex usage/rate/capacity exhaustion──&gt; deferred
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>                   └──auth/model/policy/worker/timeout────────&gt; blocked
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>deferred ──next tick claim + recovery──&gt; running
+</code></pre></div>
+<p>Deferred claims return the issue to <code>running</code> before Pi resumes the same UUIDv5
+session. A repeat transient failure returns it to <code>deferred</code>; a later accepted
+draft PR reaches <code>review</code>.</p>
 <p>The workflow instructions belong to the configured skill; the Pi adapter knows
 only how to execute a rendered prompt. <code>merge: never</code> is an accepted-result
 contract, not a credential sandbox. Host-state locking coordinates config
 worktrees on one machine and does not provide distributed locking.</p>
 <h2 id="ci-generation-flow">CI Generation Flow<a class="headerlink" href="#ci-generation-flow" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>config.yml → load_config() → get_workflows()
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>  → _parse_triggers() converts raw YAML into typed TriggerSpec tuple
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>  → _triggers_to_actions_yaml() converts back to GHA on: syntax
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>  → Templates receive is_pr_trigger flag for conditional rendering:
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>      PR triggers: draft check + PR-number concurrency group
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>      Schedule/manual: simple concurrency group, no draft check
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>  → Single-skill workflow: generate_caller() from caller.yml.j2
-<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>  → Multi-skill workflow: generate_chain_workflow() from chain.yml.j2
-<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>      Skills within a stage run in parallel (separate GHA jobs)
-<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>      Stages are sequential (each waits for the previous)
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>config.yml → load_config() → get_workflows()
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>  → _parse_triggers() converts raw YAML into typed TriggerSpec tuple
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>  → _triggers_to_actions_yaml() converts back to GHA on: syntax
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>  → Templates receive is_pr_trigger flag for conditional rendering:
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>      PR triggers: draft check + PR-number concurrency group
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>      Schedule/manual: simple concurrency group, no draft check
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>  → Single-skill workflow: generate_caller() from caller.yml.j2
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>  → Multi-skill workflow: generate_chain_workflow() from chain.yml.j2
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>      Skills within a stage run in parallel (separate GHA jobs)
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>      Stages are sequential (each waits for the previous)
 </code></pre></div>
 <p>Templates live in <code>groundskeeper/builtins/templates/github_actions/</code>.</p>
 
