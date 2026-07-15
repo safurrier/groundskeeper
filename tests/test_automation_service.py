@@ -105,6 +105,7 @@ def test_successful_review_propagates_resumable_session_metadata() -> None:
         session_id="session-123",
         session_name="gk-me-dots-7",
         resume_command="pi --session session-123",
+        public_detail="Summary: should not replace PR authority",
     )
 
     result = AutomationService(tracker, FakeRunner(worker)).tick(AUTOMATION)
@@ -132,6 +133,45 @@ def test_worker_failure_with_valid_draft_pr_reconciles_to_review() -> None:
     assert tracker.transitions == [(TaskState.REVIEW, "https://github/pr/1")]
 
 
+def test_public_blocker_detail_is_used_when_no_draft_pr_exists() -> None:
+    tracker = FakeTracker()
+    worker = WorkResult(
+        True,
+        public_detail=(
+            "Summary: Focused tests pass, but review requires a decision.\n\n"
+            "Next action: Approve the recorded skip and resume."
+        ),
+        session_id="session-123",
+        resume_command="pi --session session-123",
+    )
+
+    result = AutomationService(tracker, FakeRunner(worker)).tick(AUTOMATION)
+
+    assert result.status == "blocked"
+    assert result.detail == (
+        "Summary: Focused tests pass, but review requires a decision.\n\n"
+        "Next action: Approve the recorded skip and resume.\n\n"
+        "Factory session: `session-123`\n"
+        "Resume: `pi --session session-123`"
+    )
+    assert tracker.transitions == [(TaskState.BLOCKED, result.detail)]
+
+
+def test_public_blocker_detail_is_used_for_durable_worker_failure() -> None:
+    tracker = FakeTracker()
+    worker = WorkResult(
+        False,
+        error="private process detail",
+        exit_code=1,
+        public_detail="Summary: Public-safe failure.\n\nNext action: Fix it.",
+    )
+
+    result = AutomationService(tracker, FakeRunner(worker)).tick(AUTOMATION)
+
+    assert result.status == "blocked"
+    assert result.detail == "Summary: Public-safe failure.\n\nNext action: Fix it."
+
+
 def test_worker_output_pr_must_match_tracker_closing_reference() -> None:
     tracker = FakeTracker()
     result = AutomationService(
@@ -149,7 +189,10 @@ def test_worker_output_pr_must_match_tracker_closing_reference() -> None:
 def test_noncompliant_closing_pr_is_blocked_as_policy_violation() -> None:
     tracker = FakeTracker()
     tracker.policy_violation = "Closing pull request is not a draft"
-    result = AutomationService(tracker, FakeRunner(WorkResult(True))).tick(AUTOMATION)
+    result = AutomationService(
+        tracker,
+        FakeRunner(WorkResult(True, public_detail="Summary: must not override policy")),
+    ).tick(AUTOMATION)
     assert result.status == "blocked"
     assert tracker.transitions == [
         (TaskState.BLOCKED, "Closing pull request is not a draft")

@@ -85,6 +85,46 @@ def _factory_flow_repo(
     return repo, env
 
 
+def _public_blocker_factory_repo(
+    tmp_path: Path,
+) -> tuple[Path, dict[str, str], Path]:
+    repo, env = _factory_repo(tmp_path, "[]")
+    binary_dir = tmp_path / "bin"
+    gh_log = tmp_path / "public-blocker-gh.log"
+    issue = (
+        '[{"number":7,"title":"Do work","body":"Acceptance",'
+        '"url":"https://github.com/me/repo/issues/7",'
+        '"author":{"login":"alex"},"labels":[{"name":"factory:ready"}]}]'
+    )
+    (binary_dir / "gh").write_text(
+        "#!/bin/sh\n"
+        f"LOG='{gh_log}'\n"
+        'case "$*" in\n'
+        f"  *\"issue list\"*\"factory:ready\"*) printf '%s' '{issue}' ;;\n"
+        "  *\"issue list\"*) printf '%s' '[]' ;;\n"
+        "  *\"pr list\"*) printf '%s' '[]' ;;\n"
+        '  *"issue comment"*) printf \'%s\' "$*" >> "$LOG" ;;\n'
+        "  *) printf '%s' '' ;;\n"
+        "esac\n"
+    )
+    marker = json.dumps(
+        {
+            "status": "blocked",
+            "summary": "Focused tests pass; review requires a decision.",
+            "next_action": "Approve the recorded skip, then resume.",
+        },
+        separators=(",", ":"),
+    )
+    pi = binary_dir / "pi"
+    pi.write_text(
+        "#!/bin/sh\n"
+        "printf '%s\\n' 'private worker analysis must not be published'\n"
+        f"printf '%s\\n' 'FACTORY_RESULT_JSON={marker}'\n"
+    )
+    pi.chmod(0o755)
+    return repo, env, gh_log
+
+
 def _deferred_factory_repo(tmp_path: Path) -> tuple[Path, dict[str, str], Path, Path]:
     repo, env = _factory_repo(tmp_path, "[]")
     binary_dir = tmp_path / "bin"
@@ -246,6 +286,23 @@ class TestAutomationE2E:
         result = run_gk("automation", "tick", "daily", "--json", cwd=repo, env=env)
         assert result.returncode == 5
         assert json.loads(result.stdout)["status"] == "blocked"
+
+    def test_public_blocker_marker_reaches_comment_without_private_output(
+        self, tmp_path: Path
+    ) -> None:
+        repo, env, gh_log = _public_blocker_factory_repo(tmp_path)
+
+        result = run_gk("automation", "tick", "daily", "--json", cwd=repo, env=env)
+
+        assert result.returncode == 5
+        payload = json.loads(result.stdout)
+        assert payload["status"] == "blocked"
+        assert "Focused tests pass" in payload["data"]["detail"]
+        comment = gh_log.read_text()
+        assert "Focused tests pass" in comment
+        assert "Approve the recorded skip" in comment
+        assert "private worker analysis" not in comment
+        assert "FACTORY_RESULT_JSON" not in comment
 
     def test_running_issue_resumes_to_review(self, tmp_path: Path) -> None:
         repo, env = _factory_flow_repo(tmp_path, "running")

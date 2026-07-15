@@ -121,11 +121,12 @@ class AutomationService:
             detail = result.error.strip() or f"worker exited {result.exit_code}"
             if result.failure_disposition is FailureDisposition.DEFERRED:
                 return self._defer(name, task, detail, result)
-            return self._block(name, task, detail, result)
+            return self._block(name, task, result.public_detail or detail, result)
         return self._block(
             name,
             task,
-            "Worker completed without an open draft pull request",
+            result.public_detail
+            or "Worker completed without an open draft pull request",
             result,
         )
 

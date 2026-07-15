@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import sys
@@ -43,6 +44,9 @@ _BLOCKING_PROVIDER_PATTERNS = (
     ),
 )
 
+FACTORY_RESULT_PREFIX = "FACTORY_RESULT_JSON="
+FACTORY_PUBLIC_DETAIL_MAX_CHARS = 8_000
+
 _TRANSIENT_PROVIDER_PATTERNS = (
     re.compile(
         r"\b(?:codex\s+)?usage limit (?:has been )?reached\b"
@@ -66,6 +70,66 @@ _TRANSIENT_PROVIDER_PATTERNS = (
         re.IGNORECASE | re.DOTALL,
     ),
 )
+
+
+def _json_object_without_duplicate_keys(
+    pairs: list[tuple[str, object]],
+) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
+def _unsafe_public_character(character: str) -> bool:
+    codepoint = ord(character)
+    return codepoint < 32 or 127 <= codepoint <= 159
+
+
+def _public_detail(output: str) -> str | None:
+    """Extract exactly one final bounded public-safe blocker marker."""
+    lines = output.rstrip().splitlines()
+    marker_indexes = [
+        index
+        for index, line in enumerate(lines)
+        if line.startswith(FACTORY_RESULT_PREFIX)
+    ]
+    if marker_indexes != [len(lines) - 1]:
+        return None
+    payload_text = lines[-1].removeprefix(FACTORY_RESULT_PREFIX)
+    if len(payload_text) > FACTORY_PUBLIC_DETAIL_MAX_CHARS:
+        return None
+    try:
+        payload = json.loads(
+            payload_text,
+            object_pairs_hook=_json_object_without_duplicate_keys,
+        )
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(payload, dict) or set(payload) != {
+        "status",
+        "summary",
+        "next_action",
+    }:
+        return None
+    if payload.get("status") != "blocked":
+        return None
+    summary = payload.get("summary")
+    next_action = payload.get("next_action")
+    if not isinstance(summary, str) or not isinstance(next_action, str):
+        return None
+    if any(_unsafe_public_character(character) for character in summary + next_action):
+        return None
+    summary = summary.strip()
+    next_action = next_action.strip()
+    if not summary or not next_action:
+        return None
+    rendered = f"Summary: {summary}\n\nNext action: {next_action}"
+    # Prevent model-authored public summaries from pinging GitHub users or teams.
+    rendered = rendered.replace("@", "@\u200b")
+    return rendered if len(rendered) <= FACTORY_PUBLIC_DETAIL_MAX_CHARS else None
 
 
 def _failure_disposition(error: str, exit_code: int) -> FailureDisposition:
@@ -122,12 +186,10 @@ class PiClient:
             flush=True,
         )
         match = re.search(r"https://github\.com/[^\s]+/pull/\d+", result.stdout)
+        # Stdout may contain private worker reasoning. Only explicit public markers
+        # are publishable; unmarked failures use stderr or the generic exit fallback.
         error_detail = (
-            result.stderr[-PROCESS_ERROR_TAIL_CHARS:]
-            if result.stderr
-            else result.stdout[-PROCESS_ERROR_TAIL_CHARS:]
-            if not result.success
-            else ""
+            result.stderr[-PROCESS_ERROR_TAIL_CHARS:] if result.stderr else ""
         )
         return WorkResult(
             success=result.success,
@@ -138,6 +200,7 @@ class PiClient:
             session_id=settings.session_id,
             session_name=settings.name,
             resume_command=f"pi --session {settings.session_id}",
+            public_detail=_public_detail(result.stdout),
             failure_disposition=(
                 FailureDisposition.BLOCKED
                 if result.success
