@@ -721,14 +721,17 @@ adapters provide typed semantic operations and bounded timeouts above it.</p>
 <a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>  → render configured skill + task/recovery/policy/session context
 <a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>  → require POSIX process-group isolation
 <a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>  → run Pi in a deterministic session with a bounded process group
-<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>      combined child output → Groundskeeper stderr for live logs
-<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>      buffered output → PR URL parsing and failure detail
-<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>  → reconcile GitHub as the durable result authority
-<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>      exact closing open draft PR → review
-<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>      non-draft, closed, or merged closing PR → blocked policy violation
-<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>      no accepted PR + explicit transient provider exhaustion → deferred
-<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a>      no accepted PR + durable/ordinary worker failure → blocked worker error
-<a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a>  → expose session id, stable name, and resume command in JSON + issue comment
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>      stdout + stderr → separately preserved and tee&#39;d to live scheduler logs
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>      stdout → PR URL parsing + strict public blocker marker extraction
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>      stderr → transient/durable provider failure classification
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>  → reconcile GitHub as the durable result authority
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>      exact closing open draft PR → review
+<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>      non-draft, closed, or merged closing PR → blocked policy violation
+<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a>      no accepted PR + explicit transient provider exhaustion → deferred
+<a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a>      no accepted PR + durable/ordinary worker failure → blocked worker error
+<a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a>      valid public blocker marker → bounded summary + next action in issue comment
+<a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a>      arbitrary worker stdout → local logs only
+<a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a>  → expose session id, stable name, and resume command in JSON + issue comment
 </code></pre></div>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>ready ──claim──&gt; running ──accepted draft PR──&gt; review
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>                   │
