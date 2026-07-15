@@ -39,7 +39,10 @@ selects and reports eligible work without labels, comments, or worker launch.
 Its compact output omits issue bodies. Pi child output is streamed to stderr so
 scheduler logs show progress without corrupting JSON stdout. Review, deferred,
 and blocked results expose `session_id`, `session_name`, and `resume_command` in
-the JSON `data` object. A deferred result means Pi reported an explicit transient
+the JSON `data` object. A blocked result may also contain a strict, bounded
+public summary/next-action marker emitted by the automation skill; unmarked Pi
+stdout remains local and the generic blocker text is the safe fallback. A
+deferred result means Pi reported an explicit transient
 provider exhaustion signal and the deterministic session will be reclaimed on a
 later tick. The generic resume command uses `pi`; callers with auth
 profiles can substitute their profile wrapper, such as `pih`. Pi automation

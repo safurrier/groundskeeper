@@ -67,6 +67,7 @@ class WorkResult:
     session_id: str | None = None
     session_name: str | None = None
     resume_command: str | None = None
+    public_detail: str | None = None
     failure_disposition: FailureDisposition = FailureDisposition.BLOCKED
 
 

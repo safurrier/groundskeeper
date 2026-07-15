@@ -1,4 +1,5 @@
 import io
+import json
 import sys
 from pathlib import Path
 
@@ -9,9 +10,11 @@ from groundskeeper.adapters.automation_runner import (
     PiAutomationRunner,
 )
 from groundskeeper.adapters.pi import (
+    FACTORY_PUBLIC_DETAIL_MAX_CHARS,
     PiClient,
     PiExecutionSettings,
     _failure_disposition,
+    _public_detail,
 )
 from groundskeeper.adapters.process import (
     PROCESS_ERROR_TAIL_CHARS,
@@ -159,6 +162,72 @@ def test_pi_client_receives_only_rendered_prompt_and_typed_settings() -> None:
     assert process.streaming is True
 
 
+def test_public_detail_uses_exactly_one_final_bounded_blocker_marker() -> None:
+    final = json.dumps(
+        {
+            "status": "blocked",
+            "summary": "Focused tests pass; @reviewer input is required.",
+            "next_action": "Approve the recorded validation skip, then resume.",
+        }
+    )
+
+    detail = _public_detail(
+        f"arbitrary private worker output\nFACTORY_RESULT_JSON={final}\n"
+    )
+
+    assert detail == (
+        "Summary: Focused tests pass; @\u200breviewer input is required.\n\n"
+        "Next action: Approve the recorded validation skip, then resume."
+    )
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        "arbitrary worker output",
+        "FACTORY_RESULT_JSON=not-json",
+        'FACTORY_RESULT_JSON={"status":"review","summary":"x","next_action":"y"}',
+        'FACTORY_RESULT_JSON={"status":"blocked","summary":"x"}',
+        'FACTORY_RESULT_JSON={"status":"blocked","summary":"","next_action":"y"}',
+        "FACTORY_RESULT_JSON=" + ("x" * (FACTORY_PUBLIC_DETAIL_MAX_CHARS + 1)),
+        "FACTORY_RESULT_JSON="
+        + json.dumps(
+            {"status": "blocked", "summary": "unsafe\nline", "next_action": "retry"}
+        ),
+        "FACTORY_RESULT_JSON="
+        + json.dumps(
+            {"status": "blocked", "summary": "unsafe\ttab", "next_action": "retry"}
+        ),
+        "FACTORY_RESULT_JSON="
+        + json.dumps(
+            {"status": "blocked", "summary": "unsafe\u001b", "next_action": "retry"}
+        ),
+        "FACTORY_RESULT_JSON="
+        + json.dumps(
+            {"status": "blocked", "summary": "unsafe\u007f", "next_action": "retry"}
+        ),
+        "FACTORY_RESULT_JSON="
+        + json.dumps(
+            {"status": "blocked", "summary": "unsafe\u0085", "next_action": "retry"}
+        ),
+        'FACTORY_RESULT_JSON={"status":"blocked","status":"blocked",'
+        '"summary":"x","next_action":"y"}',
+        'FACTORY_RESULT_JSON={"status":"blocked","summary":"old","next_action":"x"}\n'
+        'FACTORY_RESULT_JSON={"status":"blocked","summary":"new","next_action":"y"}',
+        'FACTORY_RESULT_JSON={"status":"blocked","summary":"x","next_action":"y"}\n'
+        "later private output",
+        'FACTORY_RESULT_JSON={"status":"blocked","summary":"x","next_action":"y"}\n'
+        "FACTORY_RESULT_JSON=malformed",
+        "FACTORY_RESULT_JSON="
+        + json.dumps(
+            {"status": "blocked", "summary": "@" * 3_990, "next_action": "retry"}
+        ),
+    ],
+)
+def test_public_detail_rejects_untrusted_or_invalid_worker_output(output: str) -> None:
+    assert _public_detail(output) is None
+
+
 @pytest.mark.parametrize(
     "error",
     [
@@ -252,6 +321,20 @@ def test_pi_client_ignores_transient_text_in_worker_output() -> None:
     )
 
     assert result.failure_disposition is FailureDisposition.BLOCKED
+
+
+def test_pi_client_never_uses_unmarked_stdout_as_public_failure_detail() -> None:
+    process = FakeProcess(
+        CommandResult((), Path("/repo"), 1, "private worker failure analysis", "")
+    )
+
+    result = PiClient(process).run_prompt(  # type: ignore[arg-type]
+        "rendered task", Path("/repo"), PiExecutionSettings("uuid", "run-name")
+    )
+
+    assert result.error == ""
+    assert result.public_detail is None
+    assert result.output == "private worker failure analysis"
 
 
 def test_pi_client_prioritizes_durable_diagnostic_over_transient_text() -> None:

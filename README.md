@@ -87,7 +87,12 @@ Each issue maps to a deterministic UUIDv5 Pi session and stable run name. Pi
 output streams to Groundskeeper's stderr for live scheduler logs while the final
 versioned JSON result remains on stdout. Review, deferred, and blocked results
 include the session ID, name, and generic `pi --session ID` resume command;
-GitHub transition comments preserve the same handoff metadata. Streaming Pi
+GitHub transition comments preserve the same handoff metadata. When no PR is
+created, an automation skill may expose a bounded public-safe explanation with
+one final `FACTORY_RESULT_JSON={"status":"blocked","summary":"...","next_action":"..."}`
+line. Groundskeeper validates that exact shape, caps it at 8,000 characters,
+neutralizes GitHub mentions, and publishes only the summary and next action.
+Arbitrary Pi stdout is never copied into an issue comment. Streaming Pi
 automations require a
 POSIX host so Groundskeeper can terminate the complete process group before
 releasing repository locks; unsupported hosts fail before starting Pi.

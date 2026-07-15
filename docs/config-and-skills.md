@@ -55,8 +55,12 @@ open-draft closing PR. Explicit Codex usage-limit, rate-limit/HTTP 429, and
 temporary provider-capacity failures then move running work to deferred for a
 deterministic-session resume on the next tick. Authentication, missing or
 misconfigured models, policy failures, ordinary worker failures, and Pi timeouts
-remain blocked. The host lock is released when
-the tick exits. Automation entries are strict:
+remain blocked. For a no-PR outcome, the skill may end with one strict
+`FACTORY_RESULT_JSON` line containing `status: blocked`, a public-safe summary,
+and a next action. Valid bounded content becomes the blocked issue explanation;
+malformed, oversized, or absent markers use the generic fallback, and arbitrary
+worker stdout remains local. The host lock is released when the tick exits.
+Automation entries are strict:
 unknown keys are rejected at the entry, source, runner, policy, and labels
 levels. For example, use `timeout-seconds`, not `timeout_seconds`, and
 `concurrency`, not `concurency`. A misspelled top-level `automation:` key is

@@ -87,13 +87,16 @@ automation config
   → render configured skill + task/recovery/policy/session context
   → require POSIX process-group isolation
   → run Pi in a deterministic session with a bounded process group
-      combined child output → Groundskeeper stderr for live logs
-      buffered output → PR URL parsing and failure detail
+      stdout + stderr → separately preserved and tee'd to live scheduler logs
+      stdout → PR URL parsing + strict public blocker marker extraction
+      stderr → transient/durable provider failure classification
   → reconcile GitHub as the durable result authority
       exact closing open draft PR → review
       non-draft, closed, or merged closing PR → blocked policy violation
       no accepted PR + explicit transient provider exhaustion → deferred
       no accepted PR + durable/ordinary worker failure → blocked worker error
+      valid public blocker marker → bounded summary + next action in issue comment
+      arbitrary worker stdout → local logs only
   → expose session id, stable name, and resume command in JSON + issue comment
 ```
 
