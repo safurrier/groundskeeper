@@ -11,6 +11,27 @@ import yaml
 
 from .conftest import requires_claude, requires_gk
 
+FACTORY_TASK_BODY = (
+    "## Factory Task\n\nSchema: 1\nKind: task\nMode: full\n\n## Dependencies\n\nNone"
+)
+
+
+def _issue_object_json(state: str, body: str = FACTORY_TASK_BODY) -> str:
+    return json.dumps(
+        {
+            "number": 7,
+            "title": "Do work",
+            "body": body,
+            "url": "https://github.com/me/repo/issues/7",
+            "author": {"login": "alex"},
+            "labels": [{"name": f"factory:{state}"}],
+        }
+    )
+
+
+def _issue_json(state: str) -> str:
+    return json.dumps([json.loads(_issue_object_json(state))])
+
 
 def _factory_repo(tmp_path: Path, gh_output: str) -> tuple[Path, dict[str, str]]:
     repo = tmp_path / "factory"
@@ -54,15 +75,13 @@ def _factory_flow_repo(
     repo, env = _factory_repo(tmp_path, "[]")
     binary_dir = tmp_path / "bin"
     pr_created = tmp_path / "pr-created"
-    issue = (
-        '[{"number":7,"title":"Do work","body":"Acceptance",'
-        '"url":"https://github.com/me/repo/issues/7",'
-        '"author":{"login":"alex"},"labels":[{"name":"factory:' + state + '"}]}]'
-    )
+    issue = _issue_json(state)
+    issue_view = _issue_object_json("running")
     draft_json = "true" if draft else "false"
     (binary_dir / "gh").write_text(
         "#!/bin/sh\n"
         'case "$*" in\n'
+        f"  *\"issue view\"*) printf '%s' '{issue_view}' ;;\n"
         f"  *\"issue list\"*\"factory:{state}\"*) printf '%s' '{issue}' ;;\n"
         "  *\"issue list\"*) printf '%s' '[]' ;;\n"
         f"  *\"pr list\"*) if [ -f '{pr_created}' ]; then "
@@ -91,15 +110,13 @@ def _public_blocker_factory_repo(
     repo, env = _factory_repo(tmp_path, "[]")
     binary_dir = tmp_path / "bin"
     gh_log = tmp_path / "public-blocker-gh.log"
-    issue = (
-        '[{"number":7,"title":"Do work","body":"Acceptance",'
-        '"url":"https://github.com/me/repo/issues/7",'
-        '"author":{"login":"alex"},"labels":[{"name":"factory:ready"}]}]'
-    )
+    issue = _issue_json("ready")
+    issue_view = _issue_object_json("running")
     (binary_dir / "gh").write_text(
         "#!/bin/sh\n"
         f"LOG='{gh_log}'\n"
         'case "$*" in\n'
+        f"  *\"issue view\"*) printf '%s' '{issue_view}' ;;\n"
         f"  *\"issue list\"*\"factory:ready\"*) printf '%s' '{issue}' ;;\n"
         "  *\"issue list\"*) printf '%s' '[]' ;;\n"
         "  *\"pr list\"*) printf '%s' '[]' ;;\n"
@@ -135,15 +152,24 @@ def _deferred_factory_repo(tmp_path: Path) -> tuple[Path, dict[str, str], Path, 
     attempts = tmp_path / "pi-attempts"
     attempts.write_text("0")
     pr_created = tmp_path / "pr-created"
-    issue_prefix = (
-        '[{"number":7,"title":"Do work","body":"Acceptance",'
-        '"url":"https://github.com/me/repo/issues/7",'
-        '"author":{"login":"alex"},"labels":[{"name":"factory:'
-    )
+    issue_view = _issue_object_json("running")
+    issue_prefix = json.dumps(
+        [
+            {
+                "number": 7,
+                "title": "Do work",
+                "body": FACTORY_TASK_BODY,
+                "url": "https://github.com/me/repo/issues/7",
+                "author": {"login": "alex"},
+                "labels": [{"name": "factory:"}],
+            }
+        ]
+    )[:-5]
     (binary_dir / "gh").write_text(
         "#!/bin/sh\n"
         f"STATE='{state}'\nLOG='{gh_log}'\nCURRENT=$(cat \"$STATE\")\n"
         'case "$*" in\n'
+        f"  *\"issue view\"*) printf '%s' '{issue_view}' ;;\n"
         '  *"issue list"*)\n'
         '    case "$*" in *"factory:$CURRENT"*) '
         f"printf '%s%s%s' '{issue_prefix}' \"$CURRENT\" '"
@@ -186,15 +212,24 @@ def _stateful_factory_repo(tmp_path: Path) -> tuple[Path, dict[str, str], Path, 
     pi_log = tmp_path / "pi.log"
     started = tmp_path / "pi-started"
     pr_created = tmp_path / "pr-created"
-    issue_prefix = (
-        '[{"number":7,"title":"Do work","body":"Acceptance",'
-        '"url":"https://github.com/me/repo/issues/7",'
-        '"author":{"login":"alex"},"labels":[{"name":"factory:'
-    )
+    issue_view = _issue_object_json("running")
+    issue_prefix = json.dumps(
+        [
+            {
+                "number": 7,
+                "title": "Do work",
+                "body": FACTORY_TASK_BODY,
+                "url": "https://github.com/me/repo/issues/7",
+                "author": {"login": "alex"},
+                "labels": [{"name": "factory:"}],
+            }
+        ]
+    )[:-5]
     (binary_dir / "gh").write_text(
         "#!/bin/sh\n"
         f"STATE='{state}'\nLOG='{gh_log}'\nCURRENT=$(cat \"$STATE\")\n"
         'case "$*" in\n'
+        f"  *\"issue view\"*) printf '%s' '{issue_view}' ;;\n"
         '  *"issue list"*)\n'
         '    case "$*" in *"factory:$CURRENT"*) '
         f"printf '%s%s%s' '{issue_prefix}' \"$CURRENT\" '" + "\"}]}]' ;; "
@@ -246,7 +281,80 @@ class TestAutomationE2E:
         )
         assert result.returncode == 0
         assert json.loads(result.stdout)["status"] == "would-dispatch"
-        assert "Acceptance" not in result.stdout
+        assert "Factory Task" not in result.stdout
+
+    def test_inspect_reports_typed_admission_without_mutation(
+        self, tmp_path: Path
+    ) -> None:
+        repo, env = _factory_flow_repo(tmp_path, "ready")
+        binary_dir = Path(env["PATH"].split(os.pathsep)[0])
+        gh_log = tmp_path / "inspect-gh.log"
+        pi_started = tmp_path / "inspect-pi-started"
+        issue = _issue_json("ready")
+        (binary_dir / "gh").write_text(
+            "#!/bin/sh\n"
+            f"printf '%s\\n' \"$*\" >> '{gh_log}'\n"
+            'case "$*" in\n'
+            f"  *\"issue list\"*\"factory:ready\"*) printf '%s' '{issue}' ;;\n"
+            "  *\"issue list\"*) printf '%s' '[]' ;;\n"
+            '  *"issue edit"*|*"issue comment"*) exit 99 ;;\n'
+            "esac\n"
+        )
+        (binary_dir / "pi").write_text(f"#!/bin/sh\ntouch '{pi_started}'\nexit 99\n")
+        (binary_dir / "pi").chmod(0o755)
+
+        result = run_gk("automation", "inspect", "daily", "--json", cwd=repo, env=env)
+
+        assert result.returncode == 0
+        task = json.loads(result.stdout)["data"]["tasks"][0]
+        assert task["admitted"] is True
+        assert task["kind"] == "task"
+        assert task["mode"] == "full"
+        assert task["dependency_status"] == "resolved"
+        commands = gh_log.read_text()
+        assert "issue edit" not in commands
+        assert "issue comment" not in commands
+        assert not pi_started.exists()
+
+    def test_malformed_contract_blocks_before_pi_in_live_tick(
+        self, tmp_path: Path
+    ) -> None:
+        repo, env = _factory_repo(tmp_path, "[]")
+        binary_dir = tmp_path / "bin"
+        pi_started = tmp_path / "pi-started"
+        bad_body = "## Dependencies\\n\\nNone"
+        issue = json.dumps(
+            [
+                {
+                    "number": 7,
+                    "title": "Bad contract",
+                    "body": bad_body,
+                    "url": "https://github.com/me/repo/issues/7",
+                    "author": {"login": "alex"},
+                    "labels": [{"name": "factory:ready"}],
+                }
+            ]
+        )
+        issue_view = _issue_object_json("running", bad_body)
+        (binary_dir / "gh").write_text(
+            "#!/bin/sh\n"
+            'case "$*" in\n'
+            f"  *\"issue view\"*) printf '%s' '{issue_view}' ;;\n"
+            f"  *\"issue list\"*\"factory:ready\"*) printf '%s' '{issue}' ;;\n"
+            "  *\"issue list\"*) printf '%s' '[]' ;;\n"
+            '  *"issue edit"*|*"issue comment"*) : ;;\n'
+            "  *\"pr list\"*) printf '%s' '[]' ;;\n"
+            "esac\n"
+        )
+        pi = binary_dir / "pi"
+        pi.write_text(f"#!/bin/sh\\ntouch '{pi_started}'\\n")
+        pi.chmod(0o755)
+
+        result = run_gk("automation", "tick", "daily", "--json", cwd=repo, env=env)
+
+        assert result.returncode == 5
+        assert json.loads(result.stdout)["status"] == "blocked"
+        assert not pi_started.exists()
 
     def test_no_work_json_through_real_process(self, tmp_path: Path) -> None:
         repo, env = _factory_repo(tmp_path, "[]")

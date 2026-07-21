@@ -25,10 +25,13 @@ Automation commands use `.groundskeeper/config.yml` by default. Use
 gk automation list [--json]
 gk automation show NAME [--json]
 gk automation validate [NAME] [--json]
+gk automation inspect NAME [--json]
 gk automation tick NAME [--dry-run] [--json]
 ```
 
-`list` and `show` inspect configured local automations. `show --json` includes
+`list` and `show` inspect configured local automations. `inspect` reads tracker
+items and reports Factory Task parsing, dependency resolution, and deterministic
+admission without labels, comments, or worker launch. `show --json` includes
 the resolved repository path, lifecycle labels, runner settings, policy, and
 selected-skill provenance (name, source kind, and path, never the prompt body).
 `validate --json` returns the same resolved skill provenance after checking it.
@@ -36,6 +39,8 @@ selected-skill provenance (name, source kind, and path, never the prompt body).
 repository path, and the fixed draft-only/never-merge policy without contacting
 GitHub or starting work. `tick` runs one bounded reconciliation pass. Dry-run
 selects and reports eligible work without labels, comments, or worker launch.
+Invalid, tracking, missing-contract, or unresolved-dependency work reports
+`would-block` in dry-run and transitions to blocked only in a live tick.
 Its compact output omits issue bodies. Pi child output is streamed to stderr so
 scheduler logs show progress without corrupting JSON stdout. Review, deferred,
 and blocked results expose `session_id`, `session_name`, and `resume_command` in

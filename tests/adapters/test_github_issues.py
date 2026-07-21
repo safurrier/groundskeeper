@@ -3,18 +3,28 @@ from pathlib import Path
 
 from groundskeeper.adapters.gh import GhIssue
 from groundskeeper.adapters.github_issues import GitHubIssuesTracker
-from groundskeeper.domain.automation import TaskState
+from groundskeeper.domain.automation import AdmissionState, TaskState
 from groundskeeper.domain.config import GitHubIssuesSource
+from groundskeeper.domain.task_contract import DependencyState, GitHubDependency
+
+VALID_BODY = (
+    "## Factory Task\n\nSchema: 1\nKind: task\nMode: full\n\n## Dependencies\n\nNone\n"
+)
 
 
 class FakeGhClient:
     def __init__(self) -> None:
         self.issues = [
             GhIssue(
-                1, "Trusted", "body", "https://issue/1", "alex", ("factory:ready",)
+                1, "Trusted", VALID_BODY, "https://issue/1", "alex", ("factory:ready",)
             ),
             GhIssue(
-                2, "Untrusted", "body", "https://issue/2", "mallory", ("factory:ready",)
+                2,
+                "Untrusted",
+                VALID_BODY,
+                "https://issue/2",
+                "mallory",
+                ("factory:ready",),
             ),
         ]
         self.labels: list[tuple[int, str, str]] = []
@@ -26,6 +36,9 @@ class FakeGhClient:
             for item in self.issues
             if all(label in item.labels for label in labels)
         ]
+
+    def get_issue(self, repository: str, issue: int) -> GhIssue:
+        return next(item for item in self.issues if item.number == issue)
 
     def replace_label(self, repository: str, issue: int, old: str, new: str) -> None:
         self.labels.append((issue, old, new))
@@ -41,6 +54,11 @@ class FakeGhClient:
 
     def comment(self, repository: str, issue: int, body: str) -> None:
         self.comments.append((issue, body))
+
+    def dependency_state(
+        self, dependency: GitHubDependency
+    ) -> tuple[DependencyState, str]:
+        return DependencyState.COMPLETE, ""
 
     def linked_pull_request(self, repository: str, issue: int) -> str | None:
         return None
@@ -59,13 +77,29 @@ def test_filters_untrusted_authors_and_claim_is_idempotent() -> None:
     assert client.labels == [(1, "factory:ready", "factory:running")]
 
 
+def test_claim_returns_freshly_relisted_issue_body() -> None:
+    client = FakeGhClient()
+    tracker = GitHubIssuesTracker(
+        client, GitHubIssuesSource("me/dots", Path("/tmp/dots"), ("alex",))
+    )
+    selected = tracker.list_ready()[0]
+    changed_body = VALID_BODY.replace("Mode: full", "Mode: compact")
+    client.issues = [replace(client.issues[0], body=changed_body)]
+
+    claim = tracker.claim(selected)
+
+    assert claim.claimed
+    assert claim.task.body == changed_body
+    assert claim.task.state is TaskState.RUNNING
+
+
 def test_lists_and_atomically_claims_deferred_work() -> None:
     client = FakeGhClient()
     client.issues = [
         GhIssue(
             7,
             "Retry",
-            "body",
+            VALID_BODY,
             "https://issue/7",
             "alex",
             ("factory:deferred",),
@@ -83,6 +117,42 @@ def test_lists_and_atomically_claims_deferred_work() -> None:
     assert claim.task.state is TaskState.RUNNING
     assert client.labels == [(7, "factory:deferred", "factory:running")]
     assert tracker.list_deferred() == []
+
+
+def test_admission_blocks_tracking_and_unresolved_dependencies() -> None:
+    client = FakeGhClient()
+    tracker = GitHubIssuesTracker(
+        client, GitHubIssuesSource("me/dots", Path("/tmp/dots"), ("alex",))
+    )
+    tracking = replace(
+        tracker.list_ready()[0],
+        body="## Factory Task\n\nSchema: 1\nKind: tracking\n\n## Dependencies\n\nNone\n",
+    )
+    tracking_admission = tracker.admit(tracking)
+    assert not tracking_admission.eligible
+    assert tracking_admission.state is AdmissionState.TRACKING
+    assert tracking_admission.task.contract is not None
+    assert tracking_admission.task.contract.kind.value == "tracking"
+    assert "Tracking" in tracking_admission.reason
+
+    client.dependency_state = lambda dependency: (  # type: ignore[method-assign]
+        DependencyState.UNRESOLVED,
+        "Dependency issue is open: https://github.com/other/repo/issues/9",
+    )
+    blocked = replace(
+        tracker.list_ready()[0],
+        body=(
+            "## Factory Task\n\nSchema: 1\nKind: task\nMode: full\n\n"
+            "## Dependencies\n\n- https://github.com/other/repo/issues/9\n"
+        ),
+    )
+    admission = tracker.admit(blocked)
+    assert not admission.eligible
+    assert admission.state is AdmissionState.DEPENDENCY_UNRESOLVED
+    assert admission.task.contract is not None
+    assert admission.task.contract.mode is not None
+    assert admission.task.contract.mode.value == "full"
+    assert "open" in admission.reason
 
 
 def test_transition_to_deferred_uses_configured_label_and_ai_authored_comment() -> None:

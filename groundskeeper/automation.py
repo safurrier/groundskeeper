@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import replace
 
 from groundskeeper.domain.automation import (
+    AdmissionResult,
+    AdmittedTask,
     AutomationTask,
     FailureDisposition,
     SessionMetadata,
@@ -14,6 +16,13 @@ from groundskeeper.domain.automation import (
 )
 from groundskeeper.domain.config import Automation
 from groundskeeper.protocols import AutomationRunner, Tracker
+
+
+def _require_admitted(admission: AdmissionResult) -> AdmittedTask:
+    """Narrow one eligible admission to the runner-safe task type."""
+    if not admission.eligible or admission.admitted_task is None:
+        raise RuntimeError("eligible admission did not provide an admitted task")
+    return admission.admitted_task
 
 
 def _work_result_for_session(metadata: SessionMetadata | None) -> WorkResult:
@@ -62,16 +71,40 @@ class AutomationService:
                     existing_pr,
                     _work_result_for_session(self._runner.session_metadata(task)),
                 )
+            try:
+                task = self._tracker.refresh(task)
+            except RuntimeError as error:
+                return self._block(automation.name, task, str(error))
+            admission = self._tracker.admit(task)
+            if not admission.eligible:
+                if dry_run:
+                    return TickResult(
+                        automation.name,
+                        "would-block",
+                        task,
+                        detail=admission.reason,
+                    )
+                return self._block(automation.name, task, admission.reason)
+            admitted = _require_admitted(admission)
+            task = admitted.task
             if dry_run:
                 return TickResult(automation.name, "would-resume", task)
             return self._finish(
-                automation.name, task, self._runner.run(task, recovery=True)
+                automation.name, task, self._runner.run(admitted, recovery=True)
             )
         deferred = self._tracker.list_deferred()
         if deferred:
             task = deferred[0]
             if dry_run:
-                return TickResult(automation.name, "would-resume", task)
+                admission = self._tracker.admit(task)
+                if not admission.eligible:
+                    return TickResult(
+                        automation.name,
+                        "would-block",
+                        task,
+                        detail=admission.reason,
+                    )
+                return TickResult(automation.name, "would-resume", admission.task)
             return self._claim_and_run(automation.name, task, recovery=True)
 
         ready = self._tracker.list_ready()
@@ -79,7 +112,15 @@ class AutomationService:
             return TickResult(automation.name, "no-work")
         task = ready[0]
         if dry_run:
-            return TickResult(automation.name, "would-dispatch", task)
+            admission = self._tracker.admit(task)
+            if not admission.eligible:
+                return TickResult(
+                    automation.name,
+                    "would-block",
+                    task,
+                    detail=admission.reason,
+                )
+            return TickResult(automation.name, "would-dispatch", admission.task)
         return self._claim_and_run(automation.name, task, recovery=False)
 
     def _claim_and_run(
@@ -100,8 +141,13 @@ class AutomationService:
                 existing_pr,
                 _work_result_for_session(self._runner.session_metadata(claim.task)),
             )
-        result = self._runner.run(claim.task, recovery=recovery)
-        return self._finish(name, claim.task, result)
+        admission = self._tracker.admit(claim.task)
+        if not admission.eligible:
+            return self._block(name, claim.task, admission.reason)
+        admitted = _require_admitted(admission)
+        admitted_task = admitted.task
+        result = self._runner.run(admitted, recovery=recovery)
+        return self._finish(name, admitted_task, result)
 
     def _finish(
         self, name: str, task: AutomationTask, result: WorkResult

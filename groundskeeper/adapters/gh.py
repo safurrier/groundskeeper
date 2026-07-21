@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import cast
 
 from groundskeeper.adapters.process import ProcessClient
+from groundskeeper.domain.task_contract import DependencyState, GitHubDependency
 
 GH_QUERY_TIMEOUT_SECONDS = 30
 GH_MUTATION_TIMEOUT_SECONDS = 30
@@ -56,48 +57,69 @@ class GhClient:
         raw = self._parse_json(result.stdout, "issue list")
         if not isinstance(raw, list):
             raise GhError("gh issue list returned an unexpected JSON shape")
-        issues: list[GhIssue] = []
-        for item in cast(list[object], raw):
-            try:
-                if not isinstance(item, dict):
+        issues = [
+            self._parse_issue(item, "issue list") for item in cast(list[object], raw)
+        ]
+        return [
+            issue for issue in issues if all(label in issue.labels for label in labels)
+        ]
+
+    def get_issue(self, repository: str, issue: int) -> GhIssue:
+        """Read one current issue snapshot after a lifecycle mutation."""
+        result = self._process.run(
+            (
+                "gh",
+                "issue",
+                "view",
+                str(issue),
+                "--repo",
+                repository,
+                "--json",
+                "number,title,body,url,author,labels",
+            ),
+            self._cwd,
+            timeout=GH_QUERY_TIMEOUT_SECONDS,
+        )
+        if not result.success:
+            raise GhError(result.stderr.strip() or "failed to read GitHub issue")
+        return self._parse_issue(
+            self._parse_json(result.stdout, "issue view"), "issue view"
+        )
+
+    @staticmethod
+    def _parse_issue(value: object, operation: str) -> GhIssue:
+        try:
+            if not isinstance(value, dict):
+                raise TypeError
+            item = cast(dict[str, object], value)
+            label_values = item.get("labels", [])
+            if not isinstance(label_values, list):
+                raise TypeError
+            labels: list[str] = []
+            for label_value in cast(list[object], label_values):
+                if not isinstance(label_value, dict):
                     raise TypeError
-                item_data = cast(dict[str, object], item)
-                label_values = item_data.get("labels", [])
-                if not isinstance(label_values, list):
+                name = cast(dict[str, object], label_value).get("name")
+                if not isinstance(name, str):
                     raise TypeError
-                item_labels_list: list[str] = []
-                for label_value in cast(list[object], label_values):
-                    if not isinstance(label_value, dict):
-                        raise TypeError
-                    label_data = cast(dict[str, object], label_value)
-                    name = label_data.get("name")
-                    if not isinstance(name, str):
-                        raise TypeError
-                    item_labels_list.append(name)
-                item_labels = tuple(item_labels_list)
-                author = item_data.get("author")
-                if not isinstance(author, dict) or not isinstance(
-                    cast(dict[str, object], author).get("login"), str
-                ):
-                    raise TypeError
-                author_data = cast(dict[str, object], author)
-                number = item_data.get("number")
-                if not isinstance(number, (int, str)):
-                    raise TypeError
-                if all(label in item_labels for label in labels):
-                    issues.append(
-                        GhIssue(
-                            number=int(number),
-                            title=str(item_data["title"]),
-                            body=str(item_data.get("body") or ""),
-                            url=str(item_data["url"]),
-                            author=str(author_data["login"]),
-                            labels=item_labels,
-                        )
-                    )
-            except (KeyError, TypeError, ValueError) as error:
-                raise GhError("gh issue list returned incomplete issue data") from error
-        return issues
+                labels.append(name)
+            author = item.get("author")
+            if not isinstance(author, dict):
+                raise TypeError
+            login = cast(dict[str, object], author).get("login")
+            number = item.get("number")
+            if not isinstance(login, str) or not isinstance(number, (int, str)):
+                raise TypeError
+            return GhIssue(
+                number=int(number),
+                title=str(item["title"]),
+                body=str(item.get("body") or ""),
+                url=str(item["url"]),
+                author=login,
+                labels=tuple(labels),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise GhError(f"gh {operation} returned incomplete issue data") from error
 
     def replace_label(self, repository: str, issue: int, old: str, new: str) -> None:
         result = self._process.run(
@@ -136,6 +158,59 @@ class GhClient:
         )
         if not result.success:
             raise GhError(result.stderr.strip() or "failed to comment on issue")
+
+    def dependency_state(
+        self, dependency: GitHubDependency
+    ) -> tuple[DependencyState, str]:
+        """Resolve one cross-repository issue or pull request dependency."""
+        endpoint = (
+            f"repos/{dependency.repository}/pulls/{dependency.number}"
+            if dependency.kind == "pull"
+            else f"repos/{dependency.repository}/issues/{dependency.number}"
+        )
+        result = self._process.run(
+            ("gh", "api", endpoint), self._cwd, timeout=GH_QUERY_TIMEOUT_SECONDS
+        )
+        if not result.success:
+            return (
+                DependencyState.INACCESSIBLE,
+                f"Cannot resolve dependency {dependency.url}",
+            )
+        raw = self._parse_json(result.stdout, "dependency query")
+        if not isinstance(raw, dict):
+            raise GhError("gh dependency query returned an unexpected JSON shape")
+        dependency_data = cast(dict[str, object], raw)
+        if dependency.kind == "pull":
+            state = dependency_data.get("state")
+            merged_at = dependency_data.get("merged_at")
+            if state == "open":
+                return (
+                    DependencyState.UNRESOLVED,
+                    f"Dependency pull request is open: {dependency.url}",
+                )
+            if state == "closed" and merged_at:
+                return DependencyState.COMPLETE, ""
+            return (
+                DependencyState.INVALID,
+                f"Dependency pull request closed without merge: {dependency.url}",
+            )
+        if "pull_request" in dependency_data:
+            return (
+                DependencyState.INVALID,
+                f"Pull request dependency must use its canonical /pull/ URL: {dependency.url}",
+            )
+        state = dependency_data.get("state")
+        if state == "open":
+            return (
+                DependencyState.UNRESOLVED,
+                f"Dependency issue is open: {dependency.url}",
+            )
+        if state == "closed":
+            return DependencyState.COMPLETE, ""
+        return (
+            DependencyState.INACCESSIBLE,
+            f"Dependency issue has unknown state: {dependency.url}",
+        )
 
     def linked_pull_request(self, repository: str, issue: int) -> str | None:
         result = self._process.run(

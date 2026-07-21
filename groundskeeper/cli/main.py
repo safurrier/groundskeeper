@@ -109,6 +109,7 @@ Examples:
   gk automation list
   gk automation show daily-dev
   gk automation validate daily-dev --json
+  gk automation inspect daily-dev --json
   gk automation tick daily-dev --dry-run --json
 """,
 )
@@ -406,6 +407,69 @@ def automation_validate(
 
 
 @automation.command(
+    "inspect",
+    epilog="""
+\b
+Examples:
+  gk automation inspect daily-dev --json
+
+Exit codes: 0 inspected, 2 invalid configuration or tracker failure.
+""",
+)
+@click.argument("name")
+@click.option("--json", "json_output", is_flag=True, help="Emit versioned JSON output.")
+@click.pass_context
+def automation_inspect(ctx: click.Context, name: str, json_output: bool) -> None:
+    """Inspect task admission without labels, comments, or worker mutation."""
+    config_path = _automation_config_path(ctx)
+    try:
+        definition = _load_automation(config_path, name)
+        process = ProcessClient()
+        tracker = GitHubIssuesTracker(
+            GhClient(process, definition.source.repository_path), definition.source
+        )
+        tasks = [
+            *tracker.list_running(),
+            *tracker.list_deferred(),
+            *tracker.list_ready(),
+        ]
+        records: list[dict[str, object]] = []
+        for task in tasks:
+            admission = tracker.admit(task)
+            contract = admission.task.contract
+            records.append(
+                {
+                    "id": task.external_id,
+                    "title": task.title,
+                    "url": task.url,
+                    "state": task.state.value,
+                    "admitted": admission.eligible,
+                    "admission_status": admission.state.value,
+                    "reason": admission.reason,
+                    "kind": contract.kind.value if contract else None,
+                    "mode": contract.mode.value if contract and contract.mode else None,
+                    "dependency_status": (
+                        "resolved"
+                        if admission.state.value == "admitted"
+                        else (
+                            admission.state.value.removeprefix("dependency-")
+                            if admission.state.value.startswith("dependency-")
+                            else None
+                        )
+                    ),
+                }
+            )
+    except (ConfigError, RuntimeError) as error:
+        _automation_error(str(error), json_output)
+        return
+    data = {"automation": name, "tasks": records}
+    if json_output:
+        click.echo(_automation_envelope("ok", data))
+        return
+    click.echo(json.dumps(data, indent=2))
+
+
+@automation.command(
     "tick",
     epilog="""
 \b
@@ -474,6 +538,7 @@ def automation_tick(
         "deferred": 0,
         "would-dispatch": 0,
         "would-resume": 0,
+        "would-block": 0,
         "not-claimed": 4,
         "blocked": 5,
     }.get(result.status, 2)

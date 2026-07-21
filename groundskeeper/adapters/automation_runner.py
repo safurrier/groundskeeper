@@ -7,7 +7,12 @@ from pathlib import Path
 from typing import Protocol
 
 from groundskeeper.adapters.pi import PiExecutionSettings
-from groundskeeper.domain.automation import AutomationTask, SessionMetadata, WorkResult
+from groundskeeper.domain.automation import (
+    AdmittedTask,
+    AutomationTask,
+    SessionMetadata,
+    WorkResult,
+)
 from groundskeeper.domain.config import AutomationPolicy, PiRunnerConfig
 from groundskeeper.domain.models import Skill
 
@@ -29,7 +34,7 @@ class AutomationSkillRenderer:
 
     def render(
         self,
-        task: AutomationTask,
+        task: AdmittedTask,
         recovery: bool,
         settings: PiExecutionSettings,
     ) -> str:
@@ -41,7 +46,7 @@ class AutomationSkillRenderer:
 
     @staticmethod
     def _context(
-        task: AutomationTask,
+        task: AdmittedTask,
         recovery: bool,
         policy: AutomationPolicy,
         settings: PiExecutionSettings,
@@ -51,15 +56,20 @@ class AutomationSkillRenderer:
             if recovery
             else "Start a new deterministic session for this task."
         )
+        normalized = task.task
+        contract = task.contract
         return "\n".join(
             (
                 "AUTOMATION_CONTEXT",
-                f"TASK_ID: {task.external_id}",
-                f"TASK_TITLE: {task.title}",
+                f"TASK_ID: {normalized.external_id}",
+                f"TASK_TITLE: {normalized.title}",
                 "TASK_BODY:",
-                task.body,
-                f"TASK_URL: {task.url}",
-                f"REPOSITORY: {task.target_repository}",
+                normalized.body,
+                f"TASK_URL: {normalized.url}",
+                f"REPOSITORY: {normalized.target_repository}",
+                f"FACTORY_TASK_KIND: {contract.kind.value}",
+                f"FACTORY_EXECUTION_MODE: {contract.mode.value if contract.mode else ''}",
+                "FACTORY_DEPENDENCY_STATUS: resolved",
                 f"POLICY_CONCURRENCY: {policy.concurrency}",
                 f"POLICY_OUTPUT: {policy.output}",
                 f"POLICY_MERGE: {policy.merge}",
@@ -104,8 +114,8 @@ class PiAutomationRunner:
             f"pi --session {settings.session_id}",
         )
 
-    def run(self, task: AutomationTask, recovery: bool = False) -> WorkResult:
-        settings = self._settings(task)
+    def run(self, task: AdmittedTask, recovery: bool = False) -> WorkResult:
+        settings = self._settings(task.task)
         return self._client.run_prompt(
             self._renderer.render(task, recovery, settings),
             self._repository_path,

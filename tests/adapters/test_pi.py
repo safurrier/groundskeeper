@@ -22,12 +22,18 @@ from groundskeeper.adapters.process import (
     ProcessClient,
 )
 from groundskeeper.domain.automation import (
+    AdmittedTask,
     AutomationTask,
     FailureDisposition,
     WorkResult,
 )
 from groundskeeper.domain.config import AutomationPolicy, PiRunnerConfig
 from groundskeeper.domain.models import Skill, SkillSource
+from groundskeeper.domain.task_contract import (
+    ExecutionMode,
+    FactoryTaskContract,
+    FactoryTaskKind,
+)
 
 
 class FakePiClient:
@@ -52,6 +58,17 @@ def _skill() -> Skill:
     )
 
 
+def _contract() -> FactoryTaskContract:
+    return FactoryTaskContract(1, FactoryTaskKind.TASK, ExecutionMode.FULL, ())
+
+
+def _admitted(task: AutomationTask) -> AdmittedTask:
+    contract = task.contract
+    if contract is None:
+        raise ValueError("test task requires a contract")
+    return AdmittedTask(task, contract)
+
+
 def _runner(client: FakePiClient) -> PiAutomationRunner:
     return PiAutomationRunner(
         client,
@@ -64,9 +81,16 @@ def _runner(client: FakePiClient) -> PiAutomationRunner:
 def test_pi_runner_renders_normalized_task_context_with_typed_settings() -> None:
     client = FakePiClient()
     task = AutomationTask(
-        "github", "3", "Fix it", "Acceptance", "https://issue/3", "alex", "me/dots"
+        "github",
+        "3",
+        "Fix it",
+        "Acceptance",
+        "https://issue/3",
+        "alex",
+        "me/dots",
+        contract=_contract(),
     )
-    result = _runner(client).run(task)
+    result = _runner(client).run(_admitted(task))
     assert result.success
     assert "Implement the task below." in client.prompt
     assert "TASK_ID: 3" in client.prompt
@@ -74,6 +98,9 @@ def test_pi_runner_renders_normalized_task_context_with_typed_settings() -> None
     assert "TASK_BODY:\nAcceptance" in client.prompt
     assert "TASK_URL: https://issue/3" in client.prompt
     assert "REPOSITORY: me/dots" in client.prompt
+    assert "FACTORY_TASK_KIND: task" in client.prompt
+    assert "FACTORY_EXECUTION_MODE: full" in client.prompt
+    assert "FACTORY_DEPENDENCY_STATUS: resolved" in client.prompt
     assert "RECOVERY_CONTEXT: Start a new deterministic session" in client.prompt
     assert client.cwd == Path("/repos/dots")
     assert client.settings is not None
@@ -91,10 +118,26 @@ def test_pi_runner_renders_normalized_task_context_with_typed_settings() -> None
     )
 
 
+def test_admitted_task_rejects_mismatched_contract() -> None:
+    task = AutomationTask(
+        "github", "3", "Fix it", "Acceptance", "https://issue/3", "alex", "me/dots"
+    )
+
+    with pytest.raises(ValueError, match="requires its normalized contract"):
+        AdmittedTask(task, _contract())
+
+
 def test_pi_runner_exposes_session_metadata_without_starting_worker() -> None:
     client = FakePiClient()
     task = AutomationTask(
-        "github", "3", "Fix it", "Acceptance", "https://issue/3", "alex", "me/dots"
+        "github",
+        "3",
+        "Fix it",
+        "Acceptance",
+        "https://issue/3",
+        "alex",
+        "me/dots",
+        contract=_contract(),
     )
 
     metadata = _runner(client).session_metadata(task)
@@ -108,12 +151,19 @@ def test_pi_runner_exposes_session_metadata_without_starting_worker() -> None:
 def test_recovery_reuses_deterministic_session_and_changes_only_context() -> None:
     client = FakePiClient()
     task = AutomationTask(
-        "github", "3", "Fix it", "Acceptance", "https://issue/3", "alex", "me/dots"
+        "github",
+        "3",
+        "Fix it",
+        "Acceptance",
+        "https://issue/3",
+        "alex",
+        "me/dots",
+        contract=_contract(),
     )
     runner = _runner(client)
-    runner.run(task)
+    runner.run(_admitted(task))
     first_session = client.settings.session_id if client.settings else ""
-    runner.run(task, recovery=True)
+    runner.run(_admitted(task), recovery=True)
     assert client.settings is not None
     assert client.settings.session_id == first_session
     assert "RECOVERY_CONTEXT: Resume the deterministic session" in client.prompt
