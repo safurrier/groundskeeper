@@ -16,11 +16,15 @@ def body(task: str, dependencies: str = "None") -> str:
     ("task", "kind", "mode"),
     [
         (
-            "Schema: 1\nKind: task\nMode: compact",
-            FactoryTaskKind.TASK,
-            ExecutionMode.COMPACT,
+            "Schema: 1\nKind: runnable\nMode: focused",
+            FactoryTaskKind.RUNNABLE,
+            ExecutionMode.FOCUSED,
         ),
-        ("Schema: 1\nKind: task\nMode: full", FactoryTaskKind.TASK, ExecutionMode.FULL),
+        (
+            "Schema: 1\nKind: runnable\nMode: full",
+            FactoryTaskKind.RUNNABLE,
+            ExecutionMode.FULL,
+        ),
         ("Schema: 1\nKind: tracking", FactoryTaskKind.TRACKING, None),
     ],
 )
@@ -36,12 +40,12 @@ def test_parses_valid_contracts(
     "value",
     [
         "",
-        "Schema: 2\nKind: task\nMode: full",
-        "Schema: 1\nKind: task",
+        "Schema: 2\nKind: runnable\nMode: full",
+        "Schema: 1\nKind: runnable",
         "Schema: 1\nKind: tracking\nMode: full",
-        "Schema: 1\nKind: task\nMode: noisy",
-        "Schema: 1\nKind: task\nMode: full\nExtra: nope",
-        "Schema: 1\nSchema: 1\nKind: task\nMode: full",
+        "Schema: 1\nKind: runnable\nMode: noisy",
+        "Schema: 1\nKind: runnable\nMode: full\nExtra: nope",
+        "Schema: 1\nSchema: 1\nKind: runnable\nMode: full",
     ],
 )
 def test_rejects_invalid_contracts(value: str) -> None:
@@ -53,10 +57,10 @@ def test_rejects_invalid_contracts(value: str) -> None:
     "value",
     [
         "## Dependencies\n\nNone\n",
-        "## Factory task\n\nSchema: 1\nKind: task\nMode: full\n\n## Dependencies\n\nNone\n",
-        body("Schema: 1\nKind: task\nMode: full")
-        + body("Schema: 1\nKind: task\nMode: full"),
-        "## Factory Task\n\nSchema: 1\nKind: task\nMode: full\n\n"
+        "## Factory task\n\nSchema: 1\nKind: runnable\nMode: full\n\n## Dependencies\n\nNone\n",
+        body("Schema: 1\nKind: runnable\nMode: full")
+        + body("Schema: 1\nKind: runnable\nMode: full"),
+        "## Factory Task\n\nSchema: 1\nKind: runnable\nMode: full\n\n"
         "## Dependencies\n\nNone\n\n## Dependencies\n\nNone\n",
     ],
 )
@@ -68,12 +72,12 @@ def test_requires_exact_unique_sections(value: str) -> None:
 @pytest.mark.parametrize("prefix", ("```markdown\n", "<!--\n", "Intro\n"))
 def test_contract_must_be_first_content(prefix: str) -> None:
     with pytest.raises(TaskContractError, match="first content"):
-        parse_factory_task(prefix + body("Schema: 1\nKind: task\nMode: full"))
+        parse_factory_task(prefix + body("Schema: 1\nKind: runnable\nMode: full"))
 
 
 def test_dependencies_must_be_second_h2_section() -> None:
     value = (
-        "## Factory Task\n\nSchema: 1\nKind: task\nMode: full\n\n"
+        "## Factory Task\n\nSchema: 1\nKind: runnable\nMode: full\n\n"
         "## Context\n\nDetails\n\n## Dependencies\n\nNone\n"
     )
 
@@ -83,7 +87,7 @@ def test_dependencies_must_be_second_h2_section() -> None:
 
 def test_contract_sections_reject_comments_and_fences() -> None:
     for marker in ("<!-- hidden -->", "```text", "~~~text"):
-        value = body(f"Schema: 1\nKind: task\nMode: full\n{marker}")
+        value = body(f"Schema: 1\nKind: runnable\nMode: full\n{marker}")
         with pytest.raises(TaskContractError, match="comments or fences"):
             parse_factory_task(value)
 
@@ -97,7 +101,7 @@ def test_contract_sections_reject_comments_and_fences() -> None:
 )
 def test_parses_cross_repository_dependencies(dependencies: str) -> None:
     contract = parse_factory_task(
-        body("Schema: 1\nKind: task\nMode: full", dependencies)
+        body("Schema: 1\nKind: runnable\nMode: full", dependencies)
     )
     assert contract.dependencies[0].repository == "owner/repo"
 
@@ -115,4 +119,4 @@ def test_parses_cross_repository_dependencies(dependencies: str) -> None:
 )
 def test_rejects_malformed_dependency_sections(dependencies: str) -> None:
     with pytest.raises(TaskContractError):
-        parse_factory_task(body("Schema: 1\nKind: task\nMode: full", dependencies))
+        parse_factory_task(body("Schema: 1\nKind: runnable\nMode: full", dependencies))

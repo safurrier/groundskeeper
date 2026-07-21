@@ -38,16 +38,16 @@ sections. The contract sections cannot contain comments or fenced examples:
 ## Factory Task
 
 Schema: 1
-Kind: task
-Mode: compact
+Kind: runnable
+Mode: focused
 
 ## Dependencies
 
 None
 ```
 
-`tracking` issues coordinate related work and are never runnable. A runnable
-`task` requires a mode. Dependencies are either exactly `None` or one full
+`tracking` issues coordinate related work and are never runnable. A `runnable`
+issue requires a `focused` or `full` mode. Dependencies are either exactly `None` or one full
 GitHub issue or pull-request URL per bullet. Before every ready, running, or
 deferred worker invocation, Groundskeeper parses this contract, resolves every
 dependency, and blocks invalid, tracking, inaccessible, unresolved, or

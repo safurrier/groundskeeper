@@ -9,9 +9,7 @@ from groundskeeper.domain.automation import AdmissionState, TaskState
 from groundskeeper.domain.config import GitHubIssuesSource
 from groundskeeper.domain.task_contract import DependencyState, GitHubDependency
 
-VALID_BODY = (
-    "## Factory Task\n\nSchema: 1\nKind: task\nMode: full\n\n## Dependencies\n\nNone\n"
-)
+VALID_BODY = "## Factory Task\n\nSchema: 1\nKind: runnable\nMode: full\n\n## Dependencies\n\nNone\n"
 
 
 class FakeGhClient:
@@ -92,7 +90,7 @@ def test_claim_returns_freshly_relisted_issue_body() -> None:
         client, GitHubIssuesSource("me/dots", Path("/tmp/dots"), ("alex",))
     )
     selected = tracker.list_ready()[0]
-    changed_body = VALID_BODY.replace("Mode: full", "Mode: compact")
+    changed_body = VALID_BODY.replace("Mode: full", "Mode: focused")
     client.issues = [replace(client.issues[0], body=changed_body)]
 
     claim = tracker.claim(selected)
@@ -182,7 +180,7 @@ def test_admission_blocks_tracking_and_unresolved_dependencies() -> None:
     blocked = replace(
         tracker.list_ready()[0],
         body=(
-            "## Factory Task\n\nSchema: 1\nKind: task\nMode: full\n\n"
+            "## Factory Task\n\nSchema: 1\nKind: runnable\nMode: full\n\n"
             "## Dependencies\n\n- https://github.com/other/repo/issues/9\n"
         ),
     )

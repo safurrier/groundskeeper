@@ -11,9 +11,7 @@ import yaml
 
 from .conftest import requires_claude, requires_gk
 
-FACTORY_TASK_BODY = (
-    "## Factory Task\n\nSchema: 1\nKind: task\nMode: full\n\n## Dependencies\n\nNone"
-)
+FACTORY_TASK_BODY = "## Factory Task\n\nSchema: 1\nKind: runnable\nMode: full\n\n## Dependencies\n\nNone"
 
 
 def _issue_object_json(state: str, body: str = FACTORY_TASK_BODY) -> str:
@@ -311,7 +309,7 @@ class TestAutomationE2E:
         assert result.returncode == 0
         task = json.loads(result.stdout)["data"]["tasks"][0]
         assert task["admitted"] is True
-        assert task["kind"] == "task"
+        assert task["kind"] == "runnable"
         assert task["mode"] == "full"
         assert task["dependency_status"] == "resolved"
         commands = gh_log.read_text()

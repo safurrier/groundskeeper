@@ -10,14 +10,14 @@ from enum import Enum
 class FactoryTaskKind(str, Enum):
     """Whether an issue is runnable work or tracking-only coordination."""
 
-    TASK = "task"
+    RUNNABLE = "runnable"
     TRACKING = "tracking"
 
 
 class ExecutionMode(str, Enum):
     """User-approved execution depth for one runnable task."""
 
-    COMPACT = "compact"
+    FOCUSED = "focused"
     FULL = "full"
 
 
@@ -96,16 +96,18 @@ def parse_factory_task(body: str) -> FactoryTaskContract:
     try:
         kind = FactoryTaskKind(values["Kind"])
     except ValueError as error:
-        raise TaskContractError("Factory Task Kind must be task or tracking") from error
+        raise TaskContractError(
+            "Factory Task Kind must be runnable or tracking"
+        ) from error
     mode_value = values.get("Mode")
-    if kind is FactoryTaskKind.TASK and mode_value is None:
-        raise TaskContractError("Factory Task task requires Mode")
+    if kind is FactoryTaskKind.RUNNABLE and mode_value is None:
+        raise TaskContractError("Factory Task runnable requires Mode")
     if kind is FactoryTaskKind.TRACKING and mode_value is not None:
         raise TaskContractError("Factory Task tracking forbids Mode")
     try:
         mode = ExecutionMode(mode_value) if mode_value is not None else None
     except ValueError as error:
-        raise TaskContractError("Factory Task Mode must be compact or full") from error
+        raise TaskContractError("Factory Task Mode must be focused or full") from error
     return FactoryTaskContract(1, kind, mode, _dependencies(dependencies))
 
 

@@ -18,9 +18,7 @@ from groundskeeper.domain.automation import (
 from groundskeeper.domain.config import Automation, GitHubIssuesSource, PiRunnerConfig
 from groundskeeper.domain.task_contract import parse_factory_task
 
-TASK_BODY = (
-    "## Factory Task\n\nSchema: 1\nKind: task\nMode: full\n\n## Dependencies\n\nNone\n"
-)
+TASK_BODY = "## Factory Task\n\nSchema: 1\nKind: runnable\nMode: full\n\n## Dependencies\n\nNone\n"
 TASK_CONTRACT = parse_factory_task(TASK_BODY)
 TASK = AutomationTask(
     "fake", "7", "Do work", TASK_BODY, "https://task/7", "alex", "me/dots"

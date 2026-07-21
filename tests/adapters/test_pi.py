@@ -59,7 +59,7 @@ def _skill() -> Skill:
 
 
 def _contract() -> FactoryTaskContract:
-    return FactoryTaskContract(1, FactoryTaskKind.TASK, ExecutionMode.FULL, ())
+    return FactoryTaskContract(1, FactoryTaskKind.RUNNABLE, ExecutionMode.FULL, ())
 
 
 def _admitted(task: AutomationTask) -> AdmittedTask:
@@ -98,7 +98,7 @@ def test_pi_runner_renders_normalized_task_context_with_typed_settings() -> None
     assert "TASK_BODY:\nAcceptance" in client.prompt
     assert "TASK_URL: https://issue/3" in client.prompt
     assert "REPOSITORY: me/dots" in client.prompt
-    assert "FACTORY_TASK_KIND: task" in client.prompt
+    assert "FACTORY_TASK_KIND: runnable" in client.prompt
     assert "FACTORY_EXECUTION_MODE: full" in client.prompt
     assert "FACTORY_DEPENDENCY_STATUS: resolved" in client.prompt
     assert "RECOVERY_CONTEXT: Start a new deterministic session" in client.prompt
