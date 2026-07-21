@@ -26,6 +26,7 @@ class GhIssue:
     url: str
     author: str
     labels: tuple[str, ...]
+    state: str
 
 
 class GhClient:
@@ -49,7 +50,7 @@ class GhClient:
             "--label",
             ",".join(labels),
             "--json",
-            "number,title,body,url,author,labels",
+            "number,title,body,url,author,labels,state",
         )
         result = self._process.run(argv, self._cwd, timeout=GH_QUERY_TIMEOUT_SECONDS)
         if not result.success:
@@ -75,7 +76,7 @@ class GhClient:
                 "--repo",
                 repository,
                 "--json",
-                "number,title,body,url,author,labels",
+                "number,title,body,url,author,labels,state",
             ),
             self._cwd,
             timeout=GH_QUERY_TIMEOUT_SECONDS,
@@ -108,7 +109,12 @@ class GhClient:
                 raise TypeError
             login = cast(dict[str, object], author).get("login")
             number = item.get("number")
-            if not isinstance(login, str) or not isinstance(number, (int, str)):
+            state = item.get("state")
+            if (
+                not isinstance(login, str)
+                or not isinstance(number, (int, str))
+                or not isinstance(state, str)
+            ):
                 raise TypeError
             return GhIssue(
                 number=int(number),
@@ -117,6 +123,7 @@ class GhClient:
                 url=str(item["url"]),
                 author=login,
                 labels=tuple(labels),
+                state=state.lower(),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise GhError(f"gh {operation} returned incomplete issue data") from error

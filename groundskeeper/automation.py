@@ -74,7 +74,9 @@ class AutomationService:
             try:
                 task = self._tracker.refresh(task)
             except RuntimeError as error:
-                return self._block(automation.name, task, str(error))
+                return TickResult(
+                    automation.name, "not-claimed", task, detail=str(error)
+                )
             admission = self._tracker.admit(task)
             if not admission.eligible:
                 if dry_run:

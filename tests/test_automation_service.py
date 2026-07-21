@@ -82,6 +82,10 @@ def _raise_github_timeout(task: AutomationTask) -> str | None:
     raise RuntimeError("command timed out after 30 seconds: gh")
 
 
+def _raise_running_label_changed(task: AutomationTask) -> AutomationTask:
+    raise RuntimeError("task no longer has lifecycle label factory:running")
+
+
 class FakeRunner:
     def __init__(
         self, result: WorkResult, metadata: SessionMetadata | None = None
@@ -177,6 +181,21 @@ def test_contract_change_after_claim_blocks_before_runner() -> None:
     assert tracker.transitions == [
         (TaskState.BLOCKED, "Factory Task changed after admission")
     ]
+
+
+def test_running_task_relabel_stops_without_overwriting_lifecycle() -> None:
+    tracker = FakeTracker()
+    running = replace(TASK, state=TaskState.RUNNING)
+    tracker.list_running = lambda: [running]  # type: ignore[method-assign]
+    tracker.refresh = _raise_running_label_changed  # type: ignore[method-assign]
+    runner = FakeRunner(WorkResult(True))
+
+    result = AutomationService(tracker, runner).tick(AUTOMATION)
+
+    assert result.status == "not-claimed"
+    assert "factory:running" in result.detail
+    assert tracker.transitions == []
+    assert runner.calls == 0
 
 
 def test_running_pr_reconciles_before_invalid_contract_blocks_recovery() -> None:

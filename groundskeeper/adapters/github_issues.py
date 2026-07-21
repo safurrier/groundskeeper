@@ -57,10 +57,21 @@ class GitHubIssuesTracker:
         )
 
     def refresh(self, task: AutomationTask) -> AutomationTask:
-        """Read the current task body immediately before admission and execution."""
+        """Read and verify the current task immediately before execution."""
         issue = self._client.get_issue(self._source.repository, int(task.external_id))
         if issue.author not in self._source.trusted_authors:
             raise RuntimeError("task author is no longer trusted")
+        if issue.state != "open":
+            raise RuntimeError("task issue is no longer open")
+        expected_label = {
+            TaskState.READY: self._source.ready_label,
+            TaskState.RUNNING: self._source.running_label,
+            TaskState.DEFERRED: self._source.deferred_label,
+            TaskState.REVIEW: self._source.review_label,
+            TaskState.BLOCKED: self._source.blocked_label,
+        }[task.state]
+        if expected_label not in issue.labels:
+            raise RuntimeError(f"task no longer has lifecycle label {expected_label}")
         return self._task_from_issue(issue, task.state)
 
     def admit(self, task: AutomationTask) -> AdmissionResult:
@@ -118,10 +129,11 @@ class GitHubIssuesTracker:
             source_label,
             self._source.running_label,
         )
-        return ClaimResult(
-            True,
-            self.refresh(replace(current_task, state=TaskState.RUNNING)),
-        )
+        try:
+            refreshed = self.refresh(replace(current_task, state=TaskState.RUNNING))
+        except RuntimeError as error:
+            return ClaimResult(False, current_task, str(error))
+        return ClaimResult(True, refreshed)
 
     def transition(
         self, task: AutomationTask, state: TaskState, detail: str = ""

@@ -1,6 +1,8 @@
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
 from groundskeeper.adapters.gh import GhIssue
 from groundskeeper.adapters.github_issues import GitHubIssuesTracker
 from groundskeeper.domain.automation import AdmissionState, TaskState
@@ -16,7 +18,13 @@ class FakeGhClient:
     def __init__(self) -> None:
         self.issues = [
             GhIssue(
-                1, "Trusted", VALID_BODY, "https://issue/1", "alex", ("factory:ready",)
+                1,
+                "Trusted",
+                VALID_BODY,
+                "https://issue/1",
+                "alex",
+                ("factory:ready",),
+                "open",
             ),
             GhIssue(
                 2,
@@ -25,6 +33,7 @@ class FakeGhClient:
                 "https://issue/2",
                 "mallory",
                 ("factory:ready",),
+                "open",
             ),
         ]
         self.labels: list[tuple[int, str, str]] = []
@@ -93,6 +102,36 @@ def test_claim_returns_freshly_relisted_issue_body() -> None:
     assert claim.task.state is TaskState.RUNNING
 
 
+def test_claim_fails_if_post_mutation_snapshot_is_no_longer_running() -> None:
+    client = FakeGhClient()
+    tracker = GitHubIssuesTracker(
+        client, GitHubIssuesSource("me/dots", Path("/tmp/dots"), ("alex",))
+    )
+    selected = tracker.list_ready()[0]
+    client.get_issue = lambda repository, issue: replace(  # type: ignore[method-assign]
+        client.issues[0], labels=("factory:blocked",)
+    )
+
+    claim = tracker.claim(selected)
+
+    assert not claim.claimed
+    assert "factory:running" in claim.reason
+
+
+def test_refresh_rejects_closed_issue() -> None:
+    client = FakeGhClient()
+    tracker = GitHubIssuesTracker(
+        client, GitHubIssuesSource("me/dots", Path("/tmp/dots"), ("alex",))
+    )
+    running = replace(tracker.list_ready()[0], state=TaskState.RUNNING)
+    client.get_issue = lambda repository, issue: replace(  # type: ignore[method-assign]
+        client.issues[0], state="closed", labels=("factory:running",)
+    )
+
+    with pytest.raises(RuntimeError, match="no longer open"):
+        tracker.refresh(running)
+
+
 def test_lists_and_atomically_claims_deferred_work() -> None:
     client = FakeGhClient()
     client.issues = [
@@ -103,6 +142,7 @@ def test_lists_and_atomically_claims_deferred_work() -> None:
             "https://issue/7",
             "alex",
             ("factory:deferred",),
+            "open",
         )
     ]
     tracker = GitHubIssuesTracker(

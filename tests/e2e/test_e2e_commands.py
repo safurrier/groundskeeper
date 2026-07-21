@@ -25,6 +25,7 @@ def _issue_object_json(state: str, body: str = FACTORY_TASK_BODY) -> str:
             "url": "https://github.com/me/repo/issues/7",
             "author": {"login": "alex"},
             "labels": [{"name": f"factory:{state}"}],
+            "state": "open",
         }
     )
 
@@ -161,6 +162,7 @@ def _deferred_factory_repo(tmp_path: Path) -> tuple[Path, dict[str, str], Path, 
                 "body": FACTORY_TASK_BODY,
                 "url": "https://github.com/me/repo/issues/7",
                 "author": {"login": "alex"},
+                "state": "open",
                 "labels": [{"name": "factory:"}],
             }
         ]
@@ -221,6 +223,7 @@ def _stateful_factory_repo(tmp_path: Path) -> tuple[Path, dict[str, str], Path, 
                 "body": FACTORY_TASK_BODY,
                 "url": "https://github.com/me/repo/issues/7",
                 "author": {"login": "alex"},
+                "state": "open",
                 "labels": [{"name": "factory:"}],
             }
         ]
@@ -332,6 +335,7 @@ class TestAutomationE2E:
                     "url": "https://github.com/me/repo/issues/7",
                     "author": {"login": "alex"},
                     "labels": [{"name": "factory:ready"}],
+                    "state": "open",
                 }
             ]
         )
