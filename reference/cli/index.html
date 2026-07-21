@@ -780,9 +780,12 @@
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>gk<span class="w"> </span>automation<span class="w"> </span>list<span class="w"> </span><span class="o">[</span>--json<span class="o">]</span>
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>gk<span class="w"> </span>automation<span class="w"> </span>show<span class="w"> </span>NAME<span class="w"> </span><span class="o">[</span>--json<span class="o">]</span>
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>gk<span class="w"> </span>automation<span class="w"> </span>validate<span class="w"> </span><span class="o">[</span>NAME<span class="o">]</span><span class="w"> </span><span class="o">[</span>--json<span class="o">]</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>gk<span class="w"> </span>automation<span class="w"> </span>tick<span class="w"> </span>NAME<span class="w"> </span><span class="o">[</span>--dry-run<span class="o">]</span><span class="w"> </span><span class="o">[</span>--json<span class="o">]</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>gk<span class="w"> </span>automation<span class="w"> </span>inspect<span class="w"> </span>NAME<span class="w"> </span><span class="o">[</span>--json<span class="o">]</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>gk<span class="w"> </span>automation<span class="w"> </span>tick<span class="w"> </span>NAME<span class="w"> </span><span class="o">[</span>--dry-run<span class="o">]</span><span class="w"> </span><span class="o">[</span>--json<span class="o">]</span>
 </code></pre></div>
-<p><code>list</code> and <code>show</code> inspect configured local automations. <code>show --json</code> includes
+<p><code>list</code> and <code>show</code> inspect configured local automations. <code>inspect</code> reads tracker
+items and reports Factory Task parsing, dependency resolution, and deterministic
+admission without labels, comments, or worker launch. <code>show --json</code> includes
 the resolved repository path, lifecycle labels, runner settings, policy, and
 selected-skill provenance (name, source kind, and path, never the prompt body).
 <code>validate --json</code> returns the same resolved skill provenance after checking it.
@@ -790,6 +793,8 @@ selected-skill provenance (name, source kind, and path, never the prompt body).
 repository path, and the fixed draft-only/never-merge policy without contacting
 GitHub or starting work. <code>tick</code> runs one bounded reconciliation pass. Dry-run
 selects and reports eligible work without labels, comments, or worker launch.
+Invalid, tracking, missing-contract, or unresolved-dependency work reports
+<code>would-block</code> in dry-run and transitions to blocked only in a live tick.
 Its compact output omits issue bodies. Pi child output is streamed to stderr so
 scheduler logs show progress without corrupting JSON stdout. Review, deferred,
 and blocked results expose <code>session_id</code>, <code>session_name</code>, and <code>resume_command</code> in
