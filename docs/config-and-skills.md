@@ -31,6 +31,32 @@ user-authorized Pi process. An automation skill receives normalized `TASK_ID`,
 `POLICY_CONCURRENCY`, `POLICY_OUTPUT`, and `POLICY_MERGE`; ordinary skill
 rendering is unchanged.
 
+Every GitHub Issues automation task must begin with exactly these first two H2
+sections. The contract sections cannot contain comments or fenced examples:
+
+```markdown
+## Factory Task
+
+Schema: 1
+Kind: runnable
+Mode: focused
+
+## Dependencies
+
+None
+```
+
+`tracking` issues coordinate related work and are never runnable. A `runnable`
+issue requires a `focused` or `full` mode. Dependencies are either exactly `None` or one full
+GitHub issue or pull-request URL per bullet. Before every ready, running, or
+deferred worker invocation, Groundskeeper parses this contract, resolves every
+dependency, and blocks invalid, tracking, inaccessible, unresolved, or
+closed-unmerged dependency work before Pi starts. This is a clean-break contract:
+issues without it are blocked for recapture rather than inferred or upgraded.
+The configured skill receives typed `FACTORY_TASK_KIND`,
+`FACTORY_EXECUTION_MODE`, and `FACTORY_DEPENDENCY_STATUS=resolved` context.
+Use `gk automation inspect NAME --json` to inspect admission without mutation.
+
 A GitHub issue source has five distinct lifecycle labels. Defaults are shown
 below; every override must be a non-empty string and all five must be distinct:
 

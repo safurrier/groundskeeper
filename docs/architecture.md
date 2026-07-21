@@ -83,8 +83,10 @@ automation config
   → resolve configured skill with provenance
   → acquire stable host-state lock for normalized repository identity
   → reconcile running issues before deferred work before ready work
-  → atomically claim at most one trusted deferred or ready issue
-  → render configured skill + task/recovery/policy/session context
+  → parse one exact Factory Task + Dependencies contract and resolve dependency state
+  → block malformed, tracking, inaccessible, unresolved, or closed-unmerged dependency work before Pi
+  → atomically claim at most one admitted trusted deferred or ready task
+  → render configured skill + typed task-contract/recovery/policy/session context
   → require POSIX process-group isolation
   → run Pi in a deterministic session with a bounded process group
       stdout + stderr → separately preserved and tee'd to live scheduler logs

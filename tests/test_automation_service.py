@@ -1,8 +1,13 @@
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
 from groundskeeper.automation import AutomationService
 from groundskeeper.domain.automation import (
+    AdmissionResult,
+    AdmissionState,
+    AdmittedTask,
     AutomationTask,
     ClaimResult,
     FailureDisposition,
@@ -11,9 +16,12 @@ from groundskeeper.domain.automation import (
     WorkResult,
 )
 from groundskeeper.domain.config import Automation, GitHubIssuesSource, PiRunnerConfig
+from groundskeeper.domain.task_contract import parse_factory_task
 
+TASK_BODY = "## Factory Task\n\nSchema: 1\nKind: runnable\nMode: full\n\n## Dependencies\n\nNone\n"
+TASK_CONTRACT = parse_factory_task(TASK_BODY)
 TASK = AutomationTask(
-    "fake", "7", "Do work", "Details", "https://task/7", "alex", "me/dots"
+    "fake", "7", "Do work", TASK_BODY, "https://task/7", "alex", "me/dots"
 )
 AUTOMATION = Automation(
     "daily",
@@ -40,6 +48,18 @@ class FakeTracker:
     def list_deferred(self) -> list[AutomationTask]:
         return self.deferred_tasks
 
+    def refresh(self, task: AutomationTask) -> AutomationTask:
+        return task
+
+    def admit(self, task: AutomationTask) -> AdmissionResult:
+        contracted = replace(task, contract=TASK_CONTRACT)
+        return AdmissionResult(
+            True,
+            contracted,
+            AdmissionState.ADMITTED,
+            admitted_task=AdmittedTask(contracted, TASK_CONTRACT),
+        )
+
     def claim(self, task: AutomationTask) -> ClaimResult:
         self.claims.append(task)
         return ClaimResult(True, replace(task, state=TaskState.RUNNING))
@@ -60,6 +80,10 @@ def _raise_github_timeout(task: AutomationTask) -> str | None:
     raise RuntimeError("command timed out after 30 seconds: gh")
 
 
+def _raise_running_label_changed(task: AutomationTask) -> AutomationTask:
+    raise RuntimeError("task no longer has lifecycle label factory:running")
+
+
 class FakeRunner:
     def __init__(
         self, result: WorkResult, metadata: SessionMetadata | None = None
@@ -72,10 +96,123 @@ class FakeRunner:
     def session_metadata(self, task: AutomationTask) -> SessionMetadata | None:
         return self.metadata
 
-    def run(self, task: AutomationTask, recovery: bool = False) -> WorkResult:
+    def run(self, task: AdmittedTask, recovery: bool = False) -> WorkResult:
         self.calls += 1
         self.recovery_calls.append(recovery)
         return self.result
+
+
+@pytest.mark.parametrize("state", [TaskState.RUNNING, TaskState.DEFERRED])
+def test_invalid_recovery_admission_blocks_without_runner(
+    state: TaskState,
+) -> None:
+    tracker = FakeTracker()
+    task = replace(TASK, state=state)
+    if state is TaskState.RUNNING:
+        tracker.list_running = lambda: [task]  # type: ignore[method-assign]
+    else:
+        tracker.tasks = []
+        tracker.deferred_tasks = [task]
+    tracker.admit = lambda value: AdmissionResult(  # type: ignore[method-assign]
+        False,
+        value,
+        AdmissionState.CONTRACT_INVALID,
+        "missing exact ## Factory Task section",
+    )
+    runner = FakeRunner(WorkResult(True))
+
+    result = AutomationService(tracker, runner).tick(AUTOMATION)
+
+    assert result.status == "blocked"
+    assert runner.calls == 0
+    assert tracker.transitions == [
+        (TaskState.BLOCKED, "missing exact ## Factory Task section")
+    ]
+
+
+def test_invalid_admission_blocks_without_runner_and_dry_run_is_mutation_free() -> None:
+    tracker = FakeTracker()
+    tracker.admit = lambda task: AdmissionResult(  # type: ignore[method-assign]
+        False,
+        task,
+        AdmissionState.CONTRACT_INVALID,
+        "missing exact ## Factory Task section",
+    )
+    runner = FakeRunner(WorkResult(True))
+    dry = AutomationService(tracker, runner).tick(AUTOMATION, dry_run=True)
+    assert dry.status == "would-block"
+    assert dry.pull_request_url is None
+    assert dry.detail == "missing exact ## Factory Task section"
+    assert tracker.transitions == []
+    assert runner.calls == 0
+
+    result = AutomationService(tracker, runner).tick(AUTOMATION)
+    assert result.status == "blocked"
+    assert tracker.transitions == [
+        (TaskState.BLOCKED, "missing exact ## Factory Task section")
+    ]
+    assert runner.calls == 0
+
+
+def test_contract_change_after_claim_blocks_before_runner() -> None:
+    tracker = FakeTracker()
+    changed = replace(TASK, body="changed", state=TaskState.RUNNING)
+
+    def claim(task: AutomationTask) -> ClaimResult:
+        tracker.claims.append(task)
+        return ClaimResult(True, changed)
+
+    tracker.claim = claim  # type: ignore[method-assign]
+    tracker.admit = lambda task: AdmissionResult(  # type: ignore[method-assign]
+        False,
+        task,
+        AdmissionState.CONTRACT_INVALID,
+        "Factory Task changed after admission",
+    )
+    runner = FakeRunner(WorkResult(True))
+
+    result = AutomationService(tracker, runner).tick(AUTOMATION)
+
+    assert result.status == "blocked"
+    assert runner.calls == 0
+    assert tracker.claims == [TASK]
+    assert tracker.transitions == [
+        (TaskState.BLOCKED, "Factory Task changed after admission")
+    ]
+
+
+def test_running_task_relabel_stops_without_overwriting_lifecycle() -> None:
+    tracker = FakeTracker()
+    running = replace(TASK, state=TaskState.RUNNING)
+    tracker.list_running = lambda: [running]  # type: ignore[method-assign]
+    tracker.pr = "https://github/pr/1"
+    tracker.refresh = _raise_running_label_changed  # type: ignore[method-assign]
+    runner = FakeRunner(WorkResult(True))
+
+    result = AutomationService(tracker, runner).tick(AUTOMATION)
+
+    assert result.status == "not-claimed"
+    assert "factory:running" in result.detail
+    assert tracker.transitions == []
+    assert runner.calls == 0
+
+
+def test_running_pr_reconciles_before_invalid_contract_blocks_recovery() -> None:
+    tracker = FakeTracker()
+    running = replace(TASK, state=TaskState.RUNNING)
+    tracker.list_running = lambda: [running]  # type: ignore[method-assign]
+    tracker.pr = "https://github/pr/1"
+    tracker.admit = lambda task: AdmissionResult(  # type: ignore[method-assign]
+        False, task, AdmissionState.CONTRACT_INVALID, "invalid contract"
+    )
+    runner = FakeRunner(WorkResult(True))
+
+    result = AutomationService(tracker, runner).tick(AUTOMATION)
+
+    assert result.status == "review"
+    assert result.pull_request_url == "https://github/pr/1"
+    assert runner.calls == 0
+    assert tracker.transitions == [(TaskState.REVIEW, "https://github/pr/1")]
 
 
 def test_dry_run_has_no_mutations_or_dispatch() -> None:
@@ -85,6 +222,22 @@ def test_dry_run_has_no_mutations_or_dispatch() -> None:
     assert result.status == "would-dispatch"
     assert tracker.transitions == []
     assert runner.calls == 0
+
+
+def test_claimed_task_pr_reconciles_before_invalid_contract_blocks() -> None:
+    tracker = FakeTracker()
+    tracker.pr = "https://github/pr/1"
+    tracker.admit = lambda task: AdmissionResult(  # type: ignore[method-assign]
+        False, task, AdmissionState.CONTRACT_INVALID, "invalid contract"
+    )
+    runner = FakeRunner(WorkResult(True))
+
+    result = AutomationService(tracker, runner).tick(AUTOMATION)
+
+    assert result.status == "review"
+    assert result.pull_request_url == "https://github/pr/1"
+    assert runner.calls == 0
+    assert tracker.transitions == [(TaskState.REVIEW, "https://github/pr/1")]
 
 
 def test_success_requires_pr_and_transitions_to_review() -> None:
