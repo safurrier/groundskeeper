@@ -59,6 +59,12 @@ class AutomationService:
         if running:
             task = running[0]
             try:
+                task = self._tracker.refresh(task)
+            except RuntimeError as error:
+                return TickResult(
+                    automation.name, "not-claimed", task, detail=str(error)
+                )
+            try:
                 existing_pr = self._tracker.find_pull_request(task)
             except RuntimeError as error:
                 return self._block(automation.name, task, str(error))
@@ -70,12 +76,6 @@ class AutomationService:
                     task,
                     existing_pr,
                     _work_result_for_session(self._runner.session_metadata(task)),
-                )
-            try:
-                task = self._tracker.refresh(task)
-            except RuntimeError as error:
-                return TickResult(
-                    automation.name, "not-claimed", task, detail=str(error)
                 )
             admission = self._tracker.admit(task)
             if not admission.eligible:

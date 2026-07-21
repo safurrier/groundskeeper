@@ -187,6 +187,7 @@ def test_running_task_relabel_stops_without_overwriting_lifecycle() -> None:
     tracker = FakeTracker()
     running = replace(TASK, state=TaskState.RUNNING)
     tracker.list_running = lambda: [running]  # type: ignore[method-assign]
+    tracker.pr = "https://github/pr/1"
     tracker.refresh = _raise_running_label_changed  # type: ignore[method-assign]
     runner = FakeRunner(WorkResult(True))
 
