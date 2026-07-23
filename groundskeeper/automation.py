@@ -64,18 +64,31 @@ class AutomationService:
                 return TickResult(
                     automation.name, "not-claimed", task, detail=str(error)
                 )
-            try:
-                existing_pr = self._tracker.find_pull_request(task)
-            except RuntimeError as error:
-                return self._block(automation.name, task, str(error))
-            if existing_pr:
+            reconciliation = self._tracker.reconcile_pull_requests(task)
+            if reconciliation.accepted_url:
                 if dry_run:
-                    return TickResult(automation.name, "review", task, existing_pr)
+                    return TickResult(
+                        automation.name,
+                        "review",
+                        task,
+                        reconciliation.accepted_url,
+                    )
                 return self._review(
                     automation.name,
                     task,
-                    existing_pr,
+                    reconciliation.accepted_url,
                     _work_result_for_session(self._runner.session_metadata(task)),
+                )
+            if reconciliation.policy_violation:
+                if dry_run:
+                    return TickResult(
+                        automation.name,
+                        "would-block",
+                        task,
+                        detail=reconciliation.policy_violation,
+                    )
+                return self._block(
+                    automation.name, task, reconciliation.policy_violation
                 )
             admission = self._tracker.admit(task)
             if not admission.eligible:
@@ -97,6 +110,9 @@ class AutomationService:
         deferred = self._tracker.list_deferred()
         if deferred:
             task = deferred[0]
+            reconciled = self._before_dispatch(automation.name, task, dry_run)
+            if reconciled is not None:
+                return reconciled
             if dry_run:
                 admission = self._tracker.admit(task)
                 if not admission.eligible:
@@ -113,6 +129,9 @@ class AutomationService:
         if not ready:
             return TickResult(automation.name, "no-work")
         task = ready[0]
+        reconciled = self._before_dispatch(automation.name, task, dry_run)
+        if reconciled is not None:
+            return reconciled
         if dry_run:
             admission = self._tracker.admit(task)
             if not admission.eligible:
@@ -132,17 +151,9 @@ class AutomationService:
         claim = self._tracker.claim(task)
         if not claim.claimed:
             return TickResult(name, "not-claimed", task, detail=claim.reason)
-        try:
-            existing_pr = self._tracker.find_pull_request(claim.task)
-        except RuntimeError as error:
-            return self._block(name, claim.task, str(error))
-        if existing_pr:
-            return self._review(
-                name,
-                claim.task,
-                existing_pr,
-                _work_result_for_session(self._runner.session_metadata(claim.task)),
-            )
+        reconciled = self._before_dispatch(name, claim.task, False)
+        if reconciled is not None:
+            return reconciled
         admission = self._tracker.admit(claim.task)
         if not admission.eligible:
             return self._block(name, claim.task, admission.reason)
@@ -151,20 +162,40 @@ class AutomationService:
         result = self._runner.run(admitted, recovery=recovery)
         return self._finish(name, admitted_task, result)
 
+    def _before_dispatch(
+        self, name: str, task: AutomationTask, dry_run: bool
+    ) -> TickResult | None:
+        """Reconcile exact closing PR policy before any worker process starts."""
+        reconciliation = self._tracker.reconcile_pull_requests(task)
+        if reconciliation.accepted_url:
+            if dry_run:
+                return TickResult(name, "review", task, reconciliation.accepted_url)
+            return self._review(
+                name,
+                task,
+                reconciliation.accepted_url,
+                _work_result_for_session(self._runner.session_metadata(task)),
+            )
+        if reconciliation.policy_violation:
+            if dry_run:
+                return TickResult(
+                    name,
+                    "would-block",
+                    task,
+                    detail=reconciliation.policy_violation,
+                )
+            return self._block(name, task, reconciliation.policy_violation)
+        return None
+
     def _finish(
         self, name: str, task: AutomationTask, result: WorkResult
     ) -> TickResult:
         """Reconcile durable GitHub state before trusting worker process status."""
-        try:
-            pr_url = self._tracker.find_pull_request(task)
-            if pr_url:
-                return self._review(name, task, pr_url, result)
-            violation = self._tracker.find_policy_violation(task)
-        except RuntimeError as error:
-            return self._block(name, task, str(error), result)
-
-        if violation is not None:
-            return self._block(name, task, violation, result)
+        reconciliation = self._tracker.reconcile_pull_requests(task)
+        if reconciliation.accepted_url:
+            return self._review(name, task, reconciliation.accepted_url, result)
+        if reconciliation.policy_violation is not None:
+            return self._block(name, task, reconciliation.policy_violation, result)
         if not result.success:
             detail = result.error.strip() or f"worker exited {result.exit_code}"
             if result.failure_disposition is FailureDisposition.DEFERRED:

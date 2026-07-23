@@ -1,11 +1,14 @@
 from dataclasses import replace
-from pathlib import Path
 
 import pytest
 
 from groundskeeper.adapters.gh import GhIssue
 from groundskeeper.adapters.github_issues import GitHubIssuesTracker
-from groundskeeper.domain.automation import AdmissionState, TaskState
+from groundskeeper.domain.automation import (
+    AdmissionState,
+    PullRequestReconciliation,
+    TaskState,
+)
 from groundskeeper.domain.config import GitHubIssuesSource
 from groundskeeper.domain.task_contract import DependencyState, GitHubDependency
 
@@ -36,8 +39,11 @@ class FakeGhClient:
         ]
         self.labels: list[tuple[int, str, str]] = []
         self.comments: list[tuple[int, str]] = []
+        self.issue_repositories: list[str] = []
+        self.pull_request_repositories: list[str] = []
 
     def list_issues(self, repository: str, labels: tuple[str, ...]) -> list[GhIssue]:
+        self.issue_repositories.append(repository)
         return [
             item
             for item in self.issues
@@ -45,9 +51,11 @@ class FakeGhClient:
         ]
 
     def get_issue(self, repository: str, issue: int) -> GhIssue:
+        self.issue_repositories.append(repository)
         return next(item for item in self.issues if item.number == issue)
 
     def replace_label(self, repository: str, issue: int, old: str, new: str) -> None:
+        self.issue_repositories.append(repository)
         self.labels.append((issue, old, new))
         self.issues = [
             replace(
@@ -60,6 +68,7 @@ class FakeGhClient:
         ]
 
     def comment(self, repository: str, issue: int, body: str) -> None:
+        self.issue_repositories.append(repository)
         self.comments.append((issue, body))
 
     def dependency_state(
@@ -67,27 +76,36 @@ class FakeGhClient:
     ) -> tuple[DependencyState, str]:
         return DependencyState.COMPLETE, ""
 
-    def linked_pull_request(self, repository: str, issue: int) -> str | None:
-        return None
+    def reconcile_pull_requests(
+        self, repository: str, source_issue: object
+    ) -> PullRequestReconciliation:
+        self.pull_request_repositories.append(repository)
+        return PullRequestReconciliation()
 
 
 def test_filters_untrusted_authors_and_claim_is_idempotent() -> None:
     client = FakeGhClient()
-    source = GitHubIssuesSource("me/dots", Path("/tmp/dots"), ("alex",))
-    tracker = GitHubIssuesTracker(client, source)
+    source = GitHubIssuesSource("source/queue", ("alex",))
+    tracker = GitHubIssuesTracker(client, source, "target/repo")
     tasks = tracker.list_ready()
-    assert [task.external_id for task in tasks] == ["1"]
+    assert [task.source_issue.number for task in tasks] == [1]
+    assert tasks[0].source_issue.repository == "source/queue"
+    assert tasks[0].target_repository == "target/repo"
     first = tracker.claim(tasks[0])
     second = tracker.claim(tasks[0])
     assert first.claimed and first.task.state == TaskState.RUNNING
     assert not second.claimed
     assert client.labels == [(1, "factory:ready", "factory:running")]
+    assert set(client.issue_repositories) == {"source/queue"}
+
+    tracker.reconcile_pull_requests(first.task)
+    assert client.pull_request_repositories == ["target/repo"]
 
 
 def test_claim_returns_freshly_relisted_issue_body() -> None:
     client = FakeGhClient()
     tracker = GitHubIssuesTracker(
-        client, GitHubIssuesSource("me/dots", Path("/tmp/dots"), ("alex",))
+        client, GitHubIssuesSource("source/queue", ("alex",)), "target/repo"
     )
     selected = tracker.list_ready()[0]
     changed_body = VALID_BODY.replace("Mode: full", "Mode: focused")
@@ -103,7 +121,7 @@ def test_claim_returns_freshly_relisted_issue_body() -> None:
 def test_claim_fails_if_post_mutation_snapshot_is_no_longer_running() -> None:
     client = FakeGhClient()
     tracker = GitHubIssuesTracker(
-        client, GitHubIssuesSource("me/dots", Path("/tmp/dots"), ("alex",))
+        client, GitHubIssuesSource("source/queue", ("alex",)), "target/repo"
     )
     selected = tracker.list_ready()[0]
     client.get_issue = lambda repository, issue: replace(  # type: ignore[method-assign]
@@ -119,7 +137,7 @@ def test_claim_fails_if_post_mutation_snapshot_is_no_longer_running() -> None:
 def test_refresh_rejects_closed_issue() -> None:
     client = FakeGhClient()
     tracker = GitHubIssuesTracker(
-        client, GitHubIssuesSource("me/dots", Path("/tmp/dots"), ("alex",))
+        client, GitHubIssuesSource("source/queue", ("alex",)), "target/repo"
     )
     running = replace(tracker.list_ready()[0], state=TaskState.RUNNING)
     client.get_issue = lambda repository, issue: replace(  # type: ignore[method-assign]
@@ -144,7 +162,7 @@ def test_lists_and_atomically_claims_deferred_work() -> None:
         )
     ]
     tracker = GitHubIssuesTracker(
-        client, GitHubIssuesSource("me/dots", Path("/tmp/dots"), ("alex",))
+        client, GitHubIssuesSource("source/queue", ("alex",)), "target/repo"
     )
 
     task = tracker.list_deferred()[0]
@@ -160,7 +178,7 @@ def test_lists_and_atomically_claims_deferred_work() -> None:
 def test_admission_blocks_tracking_and_unresolved_dependencies() -> None:
     client = FakeGhClient()
     tracker = GitHubIssuesTracker(
-        client, GitHubIssuesSource("me/dots", Path("/tmp/dots"), ("alex",))
+        client, GitHubIssuesSource("source/queue", ("alex",)), "target/repo"
     )
     tracking = replace(
         tracker.list_ready()[0],
@@ -198,11 +216,11 @@ def test_transition_to_deferred_uses_configured_label_and_ai_authored_comment() 
     tracker = GitHubIssuesTracker(
         client,
         GitHubIssuesSource(
-            "me/dots",
-            Path("/tmp/dots"),
+            "source/queue",
             ("alex",),
             deferred_label="queue:later",
         ),
+        "target/repo",
     )
     running = tracker.claim(tracker.list_ready()[0]).task
 

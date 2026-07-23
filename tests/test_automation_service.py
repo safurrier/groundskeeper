@@ -11,21 +11,35 @@ from groundskeeper.domain.automation import (
     AutomationTask,
     ClaimResult,
     FailureDisposition,
+    GitHubIssueIdentity,
+    PullRequestReconciliation,
     SessionMetadata,
     TaskState,
     WorkResult,
 )
-from groundskeeper.domain.config import Automation, GitHubIssuesSource, PiRunnerConfig
+from groundskeeper.domain.config import (
+    Automation,
+    AutomationTarget,
+    GitHubIssuesSource,
+    PiRunnerConfig,
+)
 from groundskeeper.domain.task_contract import parse_factory_task
 
 TASK_BODY = "## Factory Task\n\nSchema: 1\nKind: runnable\nMode: full\n\n## Dependencies\n\nNone\n"
 TASK_CONTRACT = parse_factory_task(TASK_BODY)
 TASK = AutomationTask(
-    "fake", "7", "Do work", TASK_BODY, "https://task/7", "alex", "me/dots"
+    "fake",
+    "Do work",
+    TASK_BODY,
+    "https://task/7",
+    "alex",
+    GitHubIssueIdentity("source/queue", 7),
+    "target/repo",
 )
 AUTOMATION = Automation(
     "daily",
-    GitHubIssuesSource("me/dots", Path("/tmp/dots"), ("alex",)),
+    GitHubIssuesSource("source/queue", ("alex",)),
+    AutomationTarget("target/repo", Path("/tmp/repo")),
     PiRunnerConfig(skill="issue-implementation"),
 )
 
@@ -38,6 +52,7 @@ class FakeTracker:
         self.transitions: list[tuple[TaskState, str]] = []
         self.pr: str | None = None
         self.policy_violation: str | None = None
+        self.reconciliation_error: str | None = None
 
     def list_ready(self) -> list[AutomationTask]:
         return self.tasks
@@ -69,15 +84,12 @@ class FakeTracker:
     ) -> None:
         self.transitions.append((state, detail))
 
-    def find_pull_request(self, task: AutomationTask) -> str | None:
-        return self.pr
-
-    def find_policy_violation(self, task: AutomationTask) -> str | None:
-        return self.policy_violation
-
-
-def _raise_github_timeout(task: AutomationTask) -> str | None:
-    raise RuntimeError("command timed out after 30 seconds: gh")
+    def reconcile_pull_requests(
+        self, task: AutomationTask
+    ) -> PullRequestReconciliation:
+        if self.reconciliation_error is not None:
+            raise RuntimeError(self.reconciliation_error)
+        return PullRequestReconciliation(self.pr, self.policy_violation)
 
 
 def _raise_running_label_changed(task: AutomationTask) -> AutomationTask:
@@ -251,8 +263,14 @@ def test_success_requires_pr_and_transitions_to_review() -> None:
 
 def test_successful_review_propagates_resumable_session_metadata() -> None:
     tracker = FakeTracker()
-    pull_requests = iter([None, "https://github/pr/1"])
-    tracker.find_pull_request = lambda task: next(pull_requests)  # type: ignore[method-assign]
+    pull_requests = iter(
+        [
+            PullRequestReconciliation(),
+            PullRequestReconciliation(),
+            PullRequestReconciliation("https://github/pr/1"),
+        ]
+    )
+    tracker.reconcile_pull_requests = lambda task: next(pull_requests)  # type: ignore[method-assign]
     worker = WorkResult(
         True,
         session_id="session-123",
@@ -352,14 +370,62 @@ def test_noncompliant_closing_pr_is_blocked_as_policy_violation() -> None:
     ]
 
 
-def test_post_worker_github_timeout_blocks_claimed_task() -> None:
+@pytest.mark.parametrize(
+    "state", [TaskState.READY, TaskState.RUNNING, TaskState.DEFERRED]
+)
+def test_preexisting_policy_violation_blocks_without_dispatch(state: TaskState) -> None:
     tracker = FakeTracker()
-    tracker.find_pull_request = _raise_github_timeout  # type: ignore[method-assign]
-    result = AutomationService(tracker, FakeRunner(WorkResult(True))).tick(AUTOMATION)
+    task = replace(TASK, state=state)
+    tracker.tasks = [task] if state is TaskState.READY else []
+    tracker.deferred_tasks = [task] if state is TaskState.DEFERRED else []
+    if state is TaskState.RUNNING:
+        tracker.list_running = lambda: [task]  # type: ignore[method-assign]
+    tracker.policy_violation = "Closing pull request is not open"
+    runner = FakeRunner(WorkResult(True))
+
+    result = AutomationService(tracker, runner).tick(AUTOMATION)
+
     assert result.status == "blocked"
+    assert runner.calls == 0
+    assert tracker.claims == []
     assert tracker.transitions == [
-        (TaskState.BLOCKED, "command timed out after 30 seconds: gh")
+        (TaskState.BLOCKED, "Closing pull request is not open")
     ]
+
+
+def test_accepted_open_draft_wins_when_violating_pr_also_exists() -> None:
+    tracker = FakeTracker()
+    tracker.pr = "https://github/pr/accepted"
+    tracker.policy_violation = "Closing pull request is not a draft"
+    runner = FakeRunner(WorkResult(True))
+
+    result = AutomationService(tracker, runner).tick(AUTOMATION)
+
+    assert result.status == "review"
+    assert result.pull_request_url == "https://github/pr/accepted"
+    assert runner.calls == 0
+    assert tracker.transitions == [(TaskState.REVIEW, "https://github/pr/accepted")]
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        "command timed out after 30 seconds: gh",
+        "closing pull request query exceeded the supported page limit",
+    ],
+)
+def test_indeterminate_reconciliation_does_not_dispatch_or_transition(
+    detail: str,
+) -> None:
+    tracker = FakeTracker()
+    tracker.reconciliation_error = detail
+    runner = FakeRunner(WorkResult(True))
+
+    with pytest.raises(RuntimeError, match=detail):
+        AutomationService(tracker, runner).tick(AUTOMATION)
+
+    assert runner.calls == 0
+    assert tracker.transitions == []
 
 
 def test_timed_out_worker_is_blocked_with_actionable_detail() -> None:
@@ -435,8 +501,14 @@ def test_deferred_task_is_claimed_before_ready_and_resumed_on_next_tick() -> Non
     tracker = FakeTracker()
     deferred = replace(TASK, state=TaskState.DEFERRED)
     tracker.deferred_tasks = [deferred]
-    pull_requests = iter([None, "https://github/pr/9"])
-    tracker.find_pull_request = lambda task: next(pull_requests)  # type: ignore[method-assign]
+    pull_requests = iter(
+        [
+            PullRequestReconciliation(),
+            PullRequestReconciliation(),
+            PullRequestReconciliation("https://github/pr/9"),
+        ]
+    )
+    tracker.reconcile_pull_requests = lambda task: next(pull_requests)  # type: ignore[method-assign]
     worker = WorkResult(
         True,
         session_id="session-123",
@@ -478,8 +550,16 @@ def test_repeat_transient_failure_returns_deferred_task_to_deferred() -> None:
 
 def test_running_work_has_priority_over_deferred_and_ready() -> None:
     tracker = FakeTracker()
-    running = replace(TASK, external_id="running", state=TaskState.RUNNING)
-    deferred = replace(TASK, external_id="deferred", state=TaskState.DEFERRED)
+    running = replace(
+        TASK,
+        source_issue=GitHubIssueIdentity("source/queue", 8),
+        state=TaskState.RUNNING,
+    )
+    deferred = replace(
+        TASK,
+        source_issue=GitHubIssueIdentity("source/queue", 9),
+        state=TaskState.DEFERRED,
+    )
     tracker.list_running = lambda: [running]  # type: ignore[method-assign]
     tracker.deferred_tasks = [deferred]
     tracker.pr = "https://github/pr/9"
@@ -488,7 +568,7 @@ def test_running_work_has_priority_over_deferred_and_ready() -> None:
     result = AutomationService(tracker, runner).tick(AUTOMATION)
 
     assert result.task is not None
-    assert result.task.external_id == running.external_id
+    assert result.task.source_issue == running.source_issue
     assert result.task.state is TaskState.REVIEW
     assert tracker.claims == []
 
@@ -524,8 +604,13 @@ def test_running_task_with_existing_pr_preserves_session_handoff() -> None:
 def test_running_task_resumes_persisted_worker_and_reconciles() -> None:
     tracker = FakeTracker()
     tracker.list_running = lambda: [replace(TASK, state=TaskState.RUNNING)]  # type: ignore[method-assign]
-    pull_requests = iter([None, "https://github/pr/9"])
-    tracker.find_pull_request = lambda task: next(pull_requests)  # type: ignore[method-assign]
+    pull_requests = iter(
+        [
+            PullRequestReconciliation(),
+            PullRequestReconciliation("https://github/pr/9"),
+        ]
+    )
+    tracker.reconcile_pull_requests = lambda task: next(pull_requests)  # type: ignore[method-assign]
     runner = FakeRunner(WorkResult(True, pull_request_url="https://github/pr/9"))
     result = AutomationService(tracker, runner).tick(AUTOMATION)
     assert result.status == "review"

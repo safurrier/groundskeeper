@@ -2,10 +2,22 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from enum import Enum
 
 from groundskeeper.domain.task_contract import FactoryTaskContract
+
+_GITHUB_REPOSITORY_RE = re.compile(
+    r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?/[A-Za-z0-9_.-]+"
+)
+
+
+def canonical_github_repository(value: str) -> str:
+    """Validate and return one canonical GitHub owner/repo identity."""
+    if not _GITHUB_REPOSITORY_RE.fullmatch(value):
+        raise ValueError("GitHub repository identity must be canonical owner/repo")
+    return value
 
 
 class TaskState(str, Enum):
@@ -19,15 +31,43 @@ class TaskState(str, Enum):
 
 
 @dataclass(frozen=True)
+class GitHubIssueIdentity:
+    """Repository-qualified identity of one source queue issue."""
+
+    repository: str
+    number: int
+
+    def __post_init__(self) -> None:
+        canonical_github_repository(self.repository)
+        if isinstance(self.number, bool) or self.number <= 0:
+            raise ValueError("GitHub issue number must be positive")
+
+    def closing_reference(self, target_repository: str) -> str:
+        """Render the GitHub closing syntax required in the target pull request."""
+        canonical_github_repository(target_repository)
+        if self.repository.casefold() == target_repository.casefold():
+            return f"#{self.number}"
+        return f"{self.repository}#{self.number}"
+
+
+@dataclass(frozen=True)
+class PullRequestReconciliation:
+    """One coherent source-issue closing-PR snapshot in the target repository."""
+
+    accepted_url: str | None = None
+    policy_violation: str | None = None
+
+
+@dataclass(frozen=True)
 class AutomationTask:
     """A unit of work normalized from an external tracker."""
 
     provider: str
-    external_id: str
     title: str
     body: str
     url: str
     author: str
+    source_issue: GitHubIssueIdentity
     target_repository: str
     state: TaskState = TaskState.READY
     contract: FactoryTaskContract | None = None

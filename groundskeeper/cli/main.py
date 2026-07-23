@@ -24,6 +24,7 @@ from groundskeeper.adapters.github_issues import GitHubIssuesTracker
 from groundskeeper.adapters.local_store import LocalSkillStore
 from groundskeeper.adapters.pi import PiClient
 from groundskeeper.adapters.process import ProcessClient
+from groundskeeper.adapters.target_checkout import validate_target_checkout
 from groundskeeper.adapters.tick_lock import TickLock
 from groundskeeper.automation import AutomationService
 from groundskeeper.domain.config import (
@@ -93,7 +94,7 @@ def cli(ctx: click.Context, skill_path: tuple[str, ...]) -> None:
     ctx.obj["extra_skill_paths"] = skill_path
 
 
-JSON_VERSION = 1
+JSON_VERSION = 2
 
 
 class AutomationCommandError(click.ClickException):
@@ -153,14 +154,21 @@ def _automation_summary(
     """Return a stable, compact automation description."""
     summary: dict[str, object] = {
         "name": item.name,
-        "repository": item.source.repository,
-        "repository_path": str(item.source.repository_path),
-        "labels": {
-            "ready": item.source.ready_label,
-            "running": item.source.running_label,
-            "deferred": item.source.deferred_label,
-            "review": item.source.review_label,
-            "blocked": item.source.blocked_label,
+        "source": {
+            "type": "github-issues",
+            "repository": item.source.repository,
+            "trusted_authors": list(item.source.trusted_authors),
+            "labels": {
+                "ready": item.source.ready_label,
+                "running": item.source.running_label,
+                "deferred": item.source.deferred_label,
+                "review": item.source.review_label,
+                "blocked": item.source.blocked_label,
+            },
+        },
+        "target": {
+            "repository": item.target.repository,
+            "repository_path": str(item.target.repository_path),
         },
         "runner": {
             "type": item.runner.type,
@@ -227,7 +235,7 @@ def _automation_state_root() -> Path:
 
 def _automation_lock_path(definition: Automation) -> Path:
     """Return a stable host-local lock shared by one normalized repository."""
-    repository_identity = definition.source.repository.strip().casefold()
+    repository_identity = definition.source.repository.casefold()
     repository_key = hashlib.sha256(repository_identity.encode("utf-8")).hexdigest()[
         :16
     ]
@@ -259,12 +267,13 @@ def _build_automation_runner(
     skill: Skill | None = None,
 ) -> PiAutomationRunner:
     """Construct the one supported typed automation runner after preflight checks."""
-    repository_path = definition.source.repository_path
+    repository_path = definition.target.repository_path
     if not repository_path.is_dir():
         raise ConfigError(
             f"Automation '{definition.name}' repository path does not exist: "
             f"{repository_path}"
         )
+    validate_target_checkout(process, repository_path, definition.target.repository)
     resolved_skill = skill or _resolve_automation_skill(
         definition, config_path, extra_skill_paths
     )
@@ -396,7 +405,7 @@ def automation_validate(
                 item, config_path, extra, ProcessClient(), skill=skill
             )
             summaries.append(_automation_summary(item, skill))
-    except ConfigError as error:
+    except (ConfigError, RuntimeError) as error:
         _automation_error(str(error), json_output)
         return
     data = {"automations": summaries}
@@ -426,7 +435,9 @@ def automation_inspect(ctx: click.Context, name: str, json_output: bool) -> None
         definition = _load_automation(config_path, name)
         process = ProcessClient()
         tracker = GitHubIssuesTracker(
-            GhClient(process, definition.source.repository_path), definition.source
+            GhClient(process, definition.target.repository_path),
+            definition.source,
+            definition.target.repository,
         )
         tasks = [
             *tracker.list_running(),
@@ -439,7 +450,12 @@ def automation_inspect(ctx: click.Context, name: str, json_output: bool) -> None
             contract = admission.task.contract
             records.append(
                 {
-                    "id": task.external_id,
+                    "id": str(task.source_issue.number),
+                    "source": {
+                        "repository": task.source_issue.repository,
+                        "issue": task.source_issue.number,
+                    },
+                    "target": {"repository": task.target_repository},
                     "title": task.title,
                     "url": task.url,
                     "state": task.state.value,
@@ -462,7 +478,15 @@ def automation_inspect(ctx: click.Context, name: str, json_output: bool) -> None
     except (ConfigError, RuntimeError) as error:
         _automation_error(str(error), json_output)
         return
-    data = {"automation": name, "tasks": records}
+    data = {
+        "automation": name,
+        "source": {"repository": definition.source.repository},
+        "target": {
+            "repository": definition.target.repository,
+            "repository_path": str(definition.target.repository_path),
+        },
+        "tasks": records,
+    }
     if json_output:
         click.echo(_automation_envelope("ok", data))
         return
@@ -503,7 +527,9 @@ def automation_tick(
             definition, config_path, extra, process, require_available=not dry_run
         )
         tracker = GitHubIssuesTracker(
-            GhClient(process, definition.source.repository_path), definition.source
+            GhClient(process, definition.target.repository_path),
+            definition.source,
+            definition.target.repository,
         )
         lock_path = _automation_lock_path(definition)
         with TickLock(lock_path):
@@ -517,14 +543,23 @@ def automation_tick(
     task_data = None
     if result.task is not None:
         task_data = {
-            "id": result.task.external_id,
+            "id": str(result.task.source_issue.number),
             "title": result.task.title,
             "url": result.task.url,
-            "repository": result.task.target_repository,
+            "source": {
+                "repository": result.task.source_issue.repository,
+                "issue": result.task.source_issue.number,
+            },
+            "target": {"repository": result.task.target_repository},
             "state": result.task.state.value,
         }
     data: dict[str, object] = {
         "automation": result.automation,
+        "source": {"repository": definition.source.repository},
+        "target": {
+            "repository": definition.target.repository,
+            "repository_path": str(definition.target.repository_path),
+        },
         "task": task_data,
         "pull_request_url": result.pull_request_url,
         "detail": result.detail,

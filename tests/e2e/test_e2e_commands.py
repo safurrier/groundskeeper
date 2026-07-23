@@ -14,13 +14,44 @@ from .conftest import requires_claude, requires_gk
 FACTORY_TASK_BODY = "## Factory Task\n\nSchema: 1\nKind: runnable\nMode: full\n\n## Dependencies\n\nNone"
 
 
+def _pull_request_graphql(*, draft: bool = True, include: bool = True) -> str:
+    nodes: list[dict[str, object]] = []
+    if include:
+        nodes.append(
+            {
+                "url": "https://github.com/target/repo/pull/9",
+                "isDraft": draft,
+                "state": "OPEN",
+                "repository": {"nameWithOwner": "target/repo"},
+            }
+        )
+    return json.dumps(
+        {
+            "data": {
+                "repository": {
+                    "issue": {
+                        "closedByPullRequestsReferences": {
+                            "nodes": nodes,
+                            "pageInfo": {
+                                "hasNextPage": False,
+                                "endCursor": None,
+                            },
+                        }
+                    }
+                }
+            }
+        },
+        separators=(",", ":"),
+    )
+
+
 def _issue_object_json(state: str, body: str = FACTORY_TASK_BODY) -> str:
     return json.dumps(
         {
             "number": 7,
             "title": "Do work",
             "body": body,
-            "url": "https://github.com/me/repo/issues/7",
+            "url": "https://github.com/source/queue/issues/7",
             "author": {"login": "alex"},
             "labels": [{"name": f"factory:{state}"}],
             "state": "open",
@@ -39,14 +70,26 @@ def _factory_repo(tmp_path: Path, gh_output: str) -> tuple[Path, dict[str, str]]
     (repo / ".groundskeeper/skills/issue-implementation/SKILL.md").write_text(
         "---\nname: issue-implementation\ndescription: Implement one issue\n---\n\nImplement it."
     )
+    subprocess.run(
+        ["git", "init", "-q"], cwd=repo, check=True, capture_output=True, text=True
+    )
+    subprocess.run(
+        ["git", "remote", "add", "origin", "git@github.com:target/repo.git"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
     (repo / ".groundskeeper/config.yml").write_text(
         f"""automations:
   daily:
     source:
       type: github-issues
-      repository: me/repo
-      repository-path: {repo}
+      repository: source/queue
       trusted-authors: [alex]
+    target:
+      repository: target/repo
+      repository-path: {repo}
     runner:
       type: pi
       skill: issue-implementation
@@ -76,17 +119,17 @@ def _factory_flow_repo(
     pr_created = tmp_path / "pr-created"
     issue = _issue_json(state)
     issue_view = _issue_object_json("running")
-    draft_json = "true" if draft else "false"
+    pull_requests = _pull_request_graphql(draft=draft)
+    no_pull_requests = _pull_request_graphql(include=False)
     (binary_dir / "gh").write_text(
         "#!/bin/sh\n"
         'case "$*" in\n'
         f"  *\"issue view\"*) printf '%s' '{issue_view}' ;;\n"
         f"  *\"issue list\"*\"factory:{state}\"*) printf '%s' '{issue}' ;;\n"
         "  *\"issue list\"*) printf '%s' '[]' ;;\n"
-        f"  *\"pr list\"*) if [ -f '{pr_created}' ]; then "
-        'printf \'%s\' \'[{"url":"https://github.com/me/repo/pull/9",'
-        f'"isDraft":{draft_json},"closingIssuesReferences":[{{"number":7}}]}}]\'; '
-        "else printf '%s' '[]'; fi ;;\n"
+        f"  *\"api graphql\"*) if [ -f '{pr_created}' ]; then "
+        f"printf '%s' '{pull_requests}'; "
+        f"else printf '%s' '{no_pull_requests}'; fi ;;\n"
         "  *) printf '%s' '' ;;\n"
         "esac\n"
     )
@@ -94,7 +137,7 @@ def _factory_flow_repo(
     pi.write_text(
         "#!/bin/sh\n"
         + (
-            f"touch '{pr_created}'\nprintf '%s' 'https://github.com/me/repo/pull/9'\n"
+            f"touch '{pr_created}'\nprintf '%s' 'https://github.com/target/repo/pull/9'\n"
             if pi_success
             else "echo 'worker failed' >&2\nexit 1\n"
         )
@@ -111,6 +154,7 @@ def _public_blocker_factory_repo(
     gh_log = tmp_path / "public-blocker-gh.log"
     issue = _issue_json("ready")
     issue_view = _issue_object_json("running")
+    no_pull_requests = _pull_request_graphql(include=False)
     (binary_dir / "gh").write_text(
         "#!/bin/sh\n"
         f"LOG='{gh_log}'\n"
@@ -118,7 +162,7 @@ def _public_blocker_factory_repo(
         f"  *\"issue view\"*) printf '%s' '{issue_view}' ;;\n"
         f"  *\"issue list\"*\"factory:ready\"*) printf '%s' '{issue}' ;;\n"
         "  *\"issue list\"*) printf '%s' '[]' ;;\n"
-        "  *\"pr list\"*) printf '%s' '[]' ;;\n"
+        f"  *\"api graphql\"*) printf '%s' '{no_pull_requests}' ;;\n"
         '  *"issue comment"*) printf \'%s\' "$*" >> "$LOG" ;;\n'
         "  *) printf '%s' '' ;;\n"
         "esac\n"
@@ -152,13 +196,15 @@ def _deferred_factory_repo(tmp_path: Path) -> tuple[Path, dict[str, str], Path, 
     attempts.write_text("0")
     pr_created = tmp_path / "pr-created"
     issue_view = _issue_object_json("running")
+    pull_requests = _pull_request_graphql()
+    no_pull_requests = _pull_request_graphql(include=False)
     issue_prefix = json.dumps(
         [
             {
                 "number": 7,
                 "title": "Do work",
                 "body": FACTORY_TASK_BODY,
-                "url": "https://github.com/me/repo/issues/7",
+                "url": "https://github.com/source/queue/issues/7",
                 "author": {"login": "alex"},
                 "state": "open",
                 "labels": [{"name": "factory:"}],
@@ -184,10 +230,9 @@ def _deferred_factory_repo(tmp_path: Path) -> tuple[Path, dict[str, str], Path, 
         '  *"issue edit"*"factory:running"*"factory:review"*) '
         'echo \'running->review\' >> "$LOG"; echo review > "$STATE" ;;\n'
         '  *"issue comment"*) echo \'comment\' >> "$LOG" ;;\n'
-        f"  *\"pr list\"*) if [ -f '{pr_created}' ]; then "
-        'printf \'%s\' \'[{"url":"https://github.com/me/repo/pull/9",'
-        '"isDraft":true,"closingIssuesReferences":[{"number":7}]}]\'; '
-        "else printf '%s' '[]'; fi ;;\n"
+        f"  *\"api graphql\"*) if [ -f '{pr_created}' ]; then "
+        f"printf '%s' '{pull_requests}'; "
+        f"else printf '%s' '{no_pull_requests}'; fi ;;\n"
         "esac\n"
     )
     pi = binary_dir / "pi"
@@ -197,7 +242,7 @@ def _deferred_factory_repo(tmp_path: Path) -> tuple[Path, dict[str, str], Path, 
         f"COUNT=$(cat '{attempts}')\nCOUNT=$((COUNT + 1))\necho $COUNT > '{attempts}'\n"
         f"if [ \"$COUNT\" -lt 3 ]; then echo 'Codex usage limit reached; retry later' >&2; exit 1; fi\n"
         f"touch '{pr_created}'\n"
-        "printf '%s' 'https://github.com/me/repo/pull/9'\n"
+        "printf '%s' 'https://github.com/target/repo/pull/9'\n"
     )
     pi.chmod(0o755)
     return repo, env, gh_log, pi_log
@@ -213,13 +258,15 @@ def _stateful_factory_repo(tmp_path: Path) -> tuple[Path, dict[str, str], Path, 
     started = tmp_path / "pi-started"
     pr_created = tmp_path / "pr-created"
     issue_view = _issue_object_json("running")
+    pull_requests = _pull_request_graphql()
+    no_pull_requests = _pull_request_graphql(include=False)
     issue_prefix = json.dumps(
         [
             {
                 "number": 7,
                 "title": "Do work",
                 "body": FACTORY_TASK_BODY,
-                "url": "https://github.com/me/repo/issues/7",
+                "url": "https://github.com/source/queue/issues/7",
                 "author": {"login": "alex"},
                 "state": "open",
                 "labels": [{"name": "factory:"}],
@@ -240,10 +287,9 @@ def _stateful_factory_repo(tmp_path: Path) -> tuple[Path, dict[str, str], Path, 
         '  *"issue edit"*"factory:running"*"factory:review"*) '
         'echo \'running->review\' >> "$LOG"; echo review > "$STATE" ;;\n'
         '  *"issue comment"*) echo \'comment\' >> "$LOG" ;;\n'
-        f"  *\"pr list\"*) if [ -f '{pr_created}' ]; then "
-        'printf \'%s\' \'[{"url":"https://github.com/me/repo/pull/9",'
-        '"isDraft":true,"closingIssuesReferences":[{"number":7}]}]\'; '
-        "else printf '%s' '[]'; fi ;;\n"
+        f"  *\"api graphql\"*) if [ -f '{pr_created}' ]; then "
+        f"printf '%s' '{pull_requests}'; "
+        f"else printf '%s' '{no_pull_requests}'; fi ;;\n"
         "esac\n"
     )
     pi = binary_dir / "pi"
@@ -252,7 +298,7 @@ def _stateful_factory_repo(tmp_path: Path) -> tuple[Path, dict[str, str], Path, 
         f"echo \"$*\" >> '{pi_log}'\n"
         f"if [ ! -f '{started}' ]; then touch '{started}'; kill -9 $PPID; exit 137; fi\n"
         f"touch '{pr_created}'\n"
-        "printf '%s' 'https://github.com/me/repo/pull/9'\n"
+        "printf '%s' 'https://github.com/target/repo/pull/9'\n"
     )
     pi.chmod(0o755)
     return repo, env, gh_log, pi_log
@@ -269,11 +315,14 @@ class TestAutomationE2E:
         )
         assert listed.returncode == shown.returncode == validated.returncode == 0
         assert json.loads(listed.stdout)["data"]["automations"][0]["name"] == "daily"
-        assert (
-            json.loads(shown.stdout)["data"]["automation"]["runner"]["skill"]
-            == "issue-implementation"
-        )
-        assert json.loads(validated.stdout)["version"] == 1
+        shown_automation = json.loads(shown.stdout)["data"]["automation"]
+        assert shown_automation["runner"]["skill"] == "issue-implementation"
+        assert shown_automation["source"]["repository"] == "source/queue"
+        assert shown_automation["target"]["repository"] == "target/repo"
+        validated_automation = json.loads(validated.stdout)["data"]["automations"][0]
+        assert validated_automation["source"]["repository"] == "source/queue"
+        assert validated_automation["target"]["repository"] == "target/repo"
+        assert json.loads(validated.stdout)["version"] == 2
 
     def test_dry_run_is_compact_and_does_not_launch_pi(self, tmp_path: Path) -> None:
         repo, env = _factory_flow_repo(tmp_path, "ready")
@@ -307,7 +356,12 @@ class TestAutomationE2E:
         result = run_gk("automation", "inspect", "daily", "--json", cwd=repo, env=env)
 
         assert result.returncode == 0
-        task = json.loads(result.stdout)["data"]["tasks"][0]
+        data = json.loads(result.stdout)["data"]
+        task = data["tasks"][0]
+        assert data["source"]["repository"] == "source/queue"
+        assert data["target"]["repository"] == "target/repo"
+        assert task["source"] == {"repository": "source/queue", "issue": 7}
+        assert task["target"] == {"repository": "target/repo"}
         assert task["admitted"] is True
         assert task["kind"] == "runnable"
         assert task["mode"] == "full"
@@ -330,7 +384,7 @@ class TestAutomationE2E:
                     "number": 7,
                     "title": "Bad contract",
                     "body": bad_body,
-                    "url": "https://github.com/me/repo/issues/7",
+                    "url": "https://github.com/source/queue/issues/7",
                     "author": {"login": "alex"},
                     "labels": [{"name": "factory:ready"}],
                     "state": "open",
@@ -338,6 +392,7 @@ class TestAutomationE2E:
             ]
         )
         issue_view = _issue_object_json("running", bad_body)
+        no_pull_requests = _pull_request_graphql(include=False)
         (binary_dir / "gh").write_text(
             "#!/bin/sh\n"
             'case "$*" in\n'
@@ -345,7 +400,7 @@ class TestAutomationE2E:
             f"  *\"issue list\"*\"factory:ready\"*) printf '%s' '{issue}' ;;\n"
             "  *\"issue list\"*) printf '%s' '[]' ;;\n"
             '  *"issue edit"*|*"issue comment"*) : ;;\n'
-            "  *\"pr list\"*) printf '%s' '[]' ;;\n"
+            f"  *\"api graphql\"*) printf '%s' '{no_pull_requests}' ;;\n"
             "esac\n"
         )
         pi = binary_dir / "pi"
@@ -364,7 +419,7 @@ class TestAutomationE2E:
         assert result.returncode == 0
         payload = json.loads(result.stdout)
         assert payload["status"] == "no-work"
-        assert payload["version"] == 1
+        assert payload["version"] == 2
 
     def test_malformed_gh_json_is_structured_error(self, tmp_path: Path) -> None:
         repo, env = _factory_repo(tmp_path, "not-json")
@@ -380,8 +435,11 @@ class TestAutomationE2E:
         payload = json.loads(result.stdout)
         assert payload["status"] == "review"
         assert (
-            payload["data"]["pull_request_url"] == "https://github.com/me/repo/pull/9"
+            payload["data"]["pull_request_url"]
+            == "https://github.com/target/repo/pull/9"
         )
+        assert payload["data"]["source"]["repository"] == "source/queue"
+        assert payload["data"]["target"]["repository"] == "target/repo"
 
     def test_non_draft_closing_pr_is_blocked_as_policy_violation(
         self, tmp_path: Path

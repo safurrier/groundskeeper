@@ -8,17 +8,33 @@ from click.testing import CliRunner
 
 from groundskeeper.adapters.tick_lock import TickAlreadyRunningError
 from groundskeeper.cli.main import _automation_lock_path, cli
-from groundskeeper.domain.automation import AutomationTask, TaskState, TickResult
+from groundskeeper.domain.automation import (
+    AutomationTask,
+    GitHubIssueIdentity,
+    TaskState,
+    TickResult,
+)
 from groundskeeper.domain.config import get_automations
+
+
+@pytest.fixture(autouse=True)
+def _accept_target_checkout(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "groundskeeper.cli.main.validate_target_checkout",
+        lambda process, repository_path, expected_repository: None,
+    )
+
 
 CONFIG = """
 automations:
   daily-dev:
     source:
       type: github-issues
+      repository: me/queue
+      trusted-authors: [alex]
+    target:
       repository: me/dots
       repository-path: /tmp
-      trusted-authors: [alex]
     runner:
       type: pi
       skill: codex-code-review
@@ -43,9 +59,46 @@ def test_automation_list_json(tmp_path: Path) -> None:
         result = runner.invoke(cli, ["automation", "list", "--json"])
     assert result.exit_code == 0
     payload = json.loads(result.output)
-    assert payload["version"] == 1
-    assert payload["status"] == "ok"
-    assert payload["data"]["automations"][0]["runner"]["skill"] == "codex-code-review"
+    assert payload == {
+        "version": 2,
+        "status": "ok",
+        "data": {
+            "automations": [
+                {
+                    "name": "daily-dev",
+                    "source": {
+                        "type": "github-issues",
+                        "repository": "me/queue",
+                        "trusted_authors": ["alex"],
+                        "labels": {
+                            "ready": "factory:ready",
+                            "running": "factory:running",
+                            "deferred": "factory:deferred",
+                            "review": "factory:review",
+                            "blocked": "factory:blocked",
+                        },
+                    },
+                    "target": {
+                        "repository": "me/dots",
+                        "repository_path": str(Path("/tmp").resolve()),
+                    },
+                    "runner": {
+                        "type": "pi",
+                        "skill": "codex-code-review",
+                        "approval": "allow",
+                        "session": "deterministic",
+                        "timeout_seconds": 7200,
+                    },
+                    "policy": {
+                        "concurrency": 1,
+                        "output": "draft-pr",
+                        "merge": "never",
+                    },
+                }
+            ]
+        },
+        "exit_code": 0,
+    }
 
 
 def test_repository_locks_are_host_scoped_and_identity_stable(
@@ -58,7 +111,7 @@ def test_repository_locks_are_host_scoped_and_identity_stable(
     queue_a, queue_b = get_automations(yaml.safe_load(config))
     other_repo = get_automations(
         yaml.safe_load(
-            CONFIG.replace("daily-dev:", "queue-c:").replace("me/dots", "me/other")
+            CONFIG.replace("daily-dev:", "queue-c:").replace("me/queue", "me/other")
         )
     )[0]
     assert _automation_lock_path(queue_a) == _automation_lock_path(queue_b)
@@ -80,27 +133,89 @@ def test_automation_show_and_validate_use_versioned_envelopes(
         show = runner.invoke(cli, ["automation", "show", "daily-dev", "--json"])
         validate = runner.invoke(cli, ["automation", "validate", "daily-dev", "--json"])
     assert show.exit_code == 0
-    shown = json.loads(show.output)["data"]["automation"]
-    assert shown["name"] == "daily-dev"
-    assert shown["repository_path"] == str(Path("/tmp").resolve())
-    assert shown["labels"]["deferred"] == "factory:deferred"
-    assert shown["labels"]["review"] == "factory:review"
-    assert shown["runner"]["timeout_seconds"] == 7200
-    assert shown["skill"] == {
-        "name": "codex-code-review",
-        "source_kind": "builtin",
-        "path": str(
-            Path(__file__).parents[2]
-            / "groundskeeper"
-            / "builtins"
-            / "skills"
-            / "codex-code-review"
-        ),
+    skill_path = str(
+        Path(__file__).parents[2]
+        / "groundskeeper"
+        / "builtins"
+        / "skills"
+        / "codex-code-review"
+    )
+    assert json.loads(show.output) == {
+        "version": 2,
+        "status": "ok",
+        "data": {
+            "automation": {
+                "name": "daily-dev",
+                "source": {
+                    "type": "github-issues",
+                    "repository": "me/queue",
+                    "trusted_authors": ["alex"],
+                    "labels": {
+                        "ready": "factory:ready",
+                        "running": "factory:running",
+                        "deferred": "factory:deferred",
+                        "review": "factory:review",
+                        "blocked": "factory:blocked",
+                    },
+                },
+                "target": {
+                    "repository": "me/dots",
+                    "repository_path": str(Path("/tmp").resolve()),
+                },
+                "runner": {
+                    "type": "pi",
+                    "skill": "codex-code-review",
+                    "approval": "allow",
+                    "session": "deterministic",
+                    "timeout_seconds": 7200,
+                },
+                "policy": {
+                    "concurrency": 1,
+                    "output": "draft-pr",
+                    "merge": "never",
+                },
+                "skill": {
+                    "name": "codex-code-review",
+                    "source_kind": "builtin",
+                    "path": skill_path,
+                },
+            }
+        },
+        "exit_code": 0,
     }
     assert validate.exit_code == 0
     validated = json.loads(validate.output)
-    assert validated["version"] == 1
+    assert validated["version"] == 2
     assert validated["data"]["automations"][0]["skill"]["name"] == "codex-code-review"
+
+
+@patch("groundskeeper.cli.main.GitHubIssuesTracker")
+def test_inspect_full_versioned_payload(mock_tracker: object, tmp_path: Path) -> None:
+    tracker = mock_tracker.return_value  # type: ignore[attr-defined]
+    tracker.list_running.return_value = []
+    tracker.list_deferred.return_value = []
+    tracker.list_ready.return_value = []
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        Path(".groundskeeper").mkdir(exist_ok=True)
+        Path(".groundskeeper/config.yml").write_text(CONFIG)
+        result = runner.invoke(cli, ["automation", "inspect", "daily-dev", "--json"])
+
+    assert result.exit_code == 0
+    assert json.loads(result.output) == {
+        "version": 2,
+        "status": "ok",
+        "data": {
+            "automation": "daily-dev",
+            "source": {"repository": "me/queue"},
+            "target": {
+                "repository": "me/dots",
+                "repository_path": str(Path("/tmp").resolve()),
+            },
+            "tasks": [],
+        },
+        "exit_code": 0,
+    }
 
 
 def test_automation_leaf_help_has_configured_examples() -> None:
@@ -130,11 +245,11 @@ def test_tick_dry_run_omits_issue_body_from_json(
 ) -> None:
     task = AutomationTask(
         "github",
-        "7",
         "Do work",
         "private acceptance criteria",
-        "https://github.com/me/dots/issues/7",
+        "https://github.com/me/queue/issues/7",
         "alex",
+        GitHubIssueIdentity("me/queue", 7),
         "me/dots",
     )
     mock_tick.return_value = TickResult("daily-dev", "would-dispatch", task)  # type: ignore[attr-defined]
@@ -147,7 +262,32 @@ def test_tick_dry_run_omits_issue_body_from_json(
         )
     assert result.exit_code == 0
     assert "private acceptance criteria" not in result.output
-    assert json.loads(result.output)["data"]["task"]["id"] == "7"
+    assert json.loads(result.output) == {
+        "version": 2,
+        "status": "would-dispatch",
+        "data": {
+            "automation": "daily-dev",
+            "source": {"repository": "me/queue"},
+            "target": {
+                "repository": "me/dots",
+                "repository_path": str(Path("/tmp").resolve()),
+            },
+            "task": {
+                "id": "7",
+                "title": "Do work",
+                "url": "https://github.com/me/queue/issues/7",
+                "source": {"repository": "me/queue", "issue": 7},
+                "target": {"repository": "me/dots"},
+                "state": "ready",
+            },
+            "pull_request_url": None,
+            "detail": "",
+            "session_id": None,
+            "session_name": None,
+            "resume_command": None,
+        },
+        "exit_code": 0,
+    }
 
 
 @patch("groundskeeper.cli.main.PiClient.supports_automation", return_value=False)
@@ -220,7 +360,7 @@ def test_tick_unknown_name_json_envelope(tmp_path: Path) -> None:
     payload = json.loads(result.output)
     assert result.exit_code == 2
     assert payload["status"] == "error" and payload["exit_code"] == 2
-    assert payload["version"] == 1
+    assert payload["version"] == 2
 
 
 @pytest.mark.parametrize(
@@ -275,11 +415,11 @@ def test_deferred_result_is_structured_and_nonfatal(
 ) -> None:
     task = AutomationTask(
         "github",
-        "7",
         "Do work",
         "body",
-        "https://github.com/me/dots/issues/7",
+        "https://github.com/me/queue/issues/7",
         "alex",
+        GitHubIssueIdentity("me/queue", 7),
         "me/dots",
         TaskState.DEFERRED,
     )

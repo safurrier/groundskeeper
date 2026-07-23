@@ -1,25 +1,67 @@
+import json
 from pathlib import Path
 
 import pytest
 
 from groundskeeper.adapters.gh import GH_QUERY_TIMEOUT_SECONDS, GhClient, GhError
 from groundskeeper.adapters.process import CommandResult
+from groundskeeper.domain.automation import GitHubIssueIdentity
 from groundskeeper.domain.task_contract import DependencyState, GitHubDependency
 
 
 class FakeProcess:
-    def __init__(self, stdout: str, success: bool = True) -> None:
-        self.stdout = stdout
+    def __init__(self, stdout: str | list[str], success: bool = True) -> None:
+        self.stdout = [stdout] if isinstance(stdout, str) else stdout
         self.success = success
         self.argv: tuple[str, ...] = ()
+        self.argv_history: list[tuple[str, ...]] = []
         self.timeout: int | None = None
 
     def run(
         self, argv: tuple[str, ...], cwd: Path, timeout: int | None = None
     ) -> CommandResult:
         self.argv = argv
+        self.argv_history.append(argv)
         self.timeout = timeout
-        return CommandResult(argv, cwd, 0 if self.success else 1, self.stdout, "")
+        stdout = self.stdout[min(len(self.argv_history) - 1, len(self.stdout) - 1)]
+        return CommandResult(argv, cwd, 0 if self.success else 1, stdout, "")
+
+
+def _graphql_page(
+    pull_requests: list[dict[str, object]], *, end_cursor: str | None = None
+) -> str:
+    return json.dumps(
+        {
+            "data": {
+                "repository": {
+                    "issue": {
+                        "closedByPullRequestsReferences": {
+                            "nodes": pull_requests,
+                            "pageInfo": {
+                                "hasNextPage": end_cursor is not None,
+                                "endCursor": end_cursor,
+                            },
+                        }
+                    }
+                }
+            }
+        }
+    )
+
+
+def _pr(
+    url: str,
+    repository: str,
+    *,
+    draft: bool = True,
+    state: str = "OPEN",
+) -> dict[str, object]:
+    return {
+        "url": url,
+        "isDraft": draft,
+        "state": state,
+        "repository": {"nameWithOwner": repository},
+    }
 
 
 def test_invalid_json_is_actionable() -> None:
@@ -106,51 +148,110 @@ def test_dependency_state_reports_inaccessible_without_parsing_error() -> None:
     assert dependency.url in reason
 
 
-def test_linked_pr_matches_exact_closing_issue_reference() -> None:
+def test_reconciliation_is_rooted_at_exact_source_issue_and_filters_target() -> None:
     process = FakeProcess(
-        '[{"url":"https://pr/incidental","isDraft":true,"closingIssuesReferences":[{"number":112}]},'
-        '{"url":"https://pr/exact","isDraft":true,"closingIssuesReferences":[{"number":12}]}]'
+        _graphql_page(
+            [
+                _pr("https://pr/other", "other/repo"),
+                _pr("https://pr/exact", "target/repo"),
+            ]
+        )
     )
-    assert (
-        GhClient(process, Path(".")).linked_pull_request("me/repo", 12)
-        == "https://pr/exact"
+
+    result = GhClient(process, Path(".")).reconcile_pull_requests(
+        "target/repo", GitHubIssueIdentity("source/queue", 12)
     )
-    assert any("closingIssuesReferences" in argument for argument in process.argv)
-    assert "--search" not in process.argv
-    assert process.argv[process.argv.index("--limit") + 1] == "1000"
+
+    assert result.accepted_url == "https://pr/exact"
+    assert result.policy_violation is None
+    assert process.argv[:3] == ("gh", "api", "graphql")
+    assert "owner=source" in process.argv
+    assert "name=queue" in process.argv
+    assert "number=12" in process.argv
+    assert "includeClosedPrs: true" in process.argv[process.argv.index("-f") + 1]
 
 
-def test_linked_pr_finds_exact_reference_after_first_hundred() -> None:
-    unrelated = ",".join(
-        f'{{"url":"https://pr/{number}","isDraft":true,"closingIssuesReferences":[{{"number":{number + 1000}}}]}}'
-        for number in range(150)
-    )
+def test_reconciliation_reads_all_issue_closing_pr_pages() -> None:
     process = FakeProcess(
-        f'[{unrelated},{{"url":"https://pr/exact","isDraft":true,'
-        '"closingIssuesReferences":[{"number":12}]}]'
-    )
-    assert (
-        GhClient(process, Path(".")).linked_pull_request("me/repo", 12)
-        == "https://pr/exact"
+        [
+            _graphql_page([], end_cursor="next-page"),
+            _graphql_page([_pr("https://pr/exact", "target/repo")]),
+        ]
     )
 
+    result = GhClient(process, Path(".")).reconcile_pull_requests(
+        "target/repo", GitHubIssueIdentity("source/queue", 12)
+    )
 
-def test_closing_non_draft_or_merged_pr_is_a_policy_violation() -> None:
+    assert result.accepted_url == "https://pr/exact"
+    assert len(process.argv_history) == 2
+    assert "endCursor=next-page" in process.argv_history[1]
+
+
+def test_reconciliation_fails_closed_when_page_limit_is_exhausted() -> None:
+    pages = [_graphql_page([], end_cursor=f"page-{number}") for number in range(10)]
+    client = GhClient(FakeProcess(pages), Path("."))
+
+    with pytest.raises(GhError):
+        client.reconcile_pull_requests(
+            "target/repo", GitHubIssueIdentity("source/queue", 12)
+        )
+
+
+@pytest.mark.parametrize(
+    ("draft", "state", "expected"),
+    [
+        (False, "OPEN", "not a draft"),
+        (True, "CLOSED", "not open"),
+        (True, "MERGED", "not open"),
+    ],
+)
+def test_exact_target_non_draft_or_closed_pr_is_policy_violation(
+    draft: bool, state: str, expected: str
+) -> None:
     process = FakeProcess(
-        '[{"url":"https://pr/ready","isDraft":false,"state":"OPEN",'
-        '"closingIssuesReferences":[{"number":12}]},'
-        '{"url":"https://pr/merged","isDraft":false,"state":"MERGED",'
-        '"closingIssuesReferences":[{"number":12}]}]'
+        _graphql_page(
+            [_pr("https://pr/invalid", "target/repo", draft=draft, state=state)]
+        )
     )
-    violation = GhClient(process, Path(".")).closing_pr_policy_violation("me/repo", 12)
-    assert violation == "Closing pull request is not a draft: https://pr/ready"
-    assert "--state" in process.argv
-    assert process.argv[process.argv.index("--state") + 1] == "all"
+
+    result = GhClient(process, Path(".")).reconcile_pull_requests(
+        "target/repo", GitHubIssueIdentity("source/queue", 12)
+    )
+
+    assert result.policy_violation is not None
+    assert expected in result.policy_violation
 
 
-def test_linked_pr_ignores_non_draft_closing_reference() -> None:
+def test_reconciliation_reports_accepted_and_violating_coexistence() -> None:
     process = FakeProcess(
-        '[{"url":"https://pr/ready","isDraft":false,'
-        '"closingIssuesReferences":[{"number":12}]}]'
+        _graphql_page(
+            [
+                _pr("https://pr/violation", "target/repo", draft=False),
+                _pr("https://pr/accepted", "target/repo"),
+            ]
+        )
     )
-    assert GhClient(process, Path(".")).linked_pull_request("me/repo", 12) is None
+
+    result = GhClient(process, Path(".")).reconcile_pull_requests(
+        "target/repo", GitHubIssueIdentity("source/queue", 12)
+    )
+
+    assert result.accepted_url == "https://pr/accepted"
+    assert result.policy_violation is not None
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        _graphql_page(
+            [{"url": "https://pr/incomplete", "isDraft": True, "state": "OPEN"}]
+        ),
+        json.dumps({"data": {"repository": {"issue": None}}}),
+    ],
+)
+def test_incomplete_closing_pull_request_payload_is_rejected(payload: str) -> None:
+    with pytest.raises(GhError):
+        GhClient(FakeProcess(payload), Path(".")).reconcile_pull_requests(
+            "target/repo", GitHubIssueIdentity("source/queue", 12)
+        )

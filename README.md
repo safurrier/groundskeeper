@@ -18,8 +18,7 @@ automations:
   daily-maintenance:
     source:
       type: github-issues
-      repository: example/widgets
-      repository-path: /Users/you/src/widgets
+      repository: example/work-factory
       trusted-authors: [maintainer]
       labels:
         ready: factory:ready
@@ -27,6 +26,9 @@ automations:
         deferred: factory:deferred
         review: factory:review
         blocked: factory:blocked
+    target:
+      repository: example/widgets
+      repository-path: /Users/you/src/widgets
     runner:
       type: pi
       skill: issue-implementation
@@ -41,8 +43,11 @@ automations:
 
 Create `issue-implementation` as an ordinary skill under
 `.groundskeeper/skills/`. It receives its usual prompt plus `TASK_ID`,
-`TASK_TITLE`, `TASK_BODY`, `TASK_URL`, `REPOSITORY`, `RECOVERY_CONTEXT`, and
-the fixed `POLICY_CONCURRENCY`, `POLICY_OUTPUT`, and `POLICY_MERGE` fields.
+`TASK_TITLE`, `TASK_BODY`, `TASK_URL`, `REPOSITORY`,
+`FACTORY_CLOSING_REFERENCE`, `RECOVERY_CONTEXT`, and the fixed
+`POLICY_CONCURRENCY`, `POLICY_OUTPUT`, and `POLICY_MERGE` fields. `REPOSITORY`
+is the target repository. The closing reference is `#123` for a same-repository
+queue or `example/work-factory#123` for a cross-repository queue.
 Normal `gk run` and `gk render` behavior for that skill is unchanged.
 
 ```bash
@@ -52,23 +57,31 @@ gk automation tick daily-maintenance --dry-run --json
 gk automation tick daily-maintenance --json
 ```
 
-`validate` checks configuration, skill resolution, the Pi executable, repository
-path, and fixed policy without contacting GitHub or claiming work. `tick` is
-noninteractive and uses a host-local advisory lock keyed by normalized GitHub
-repository identity. Locks live under `$XDG_STATE_HOME/groundskeeper/locks`
+`validate` checks configuration, skill resolution, the Pi executable, fixed
+policy, and that the target path is a Git worktree whose GitHub `origin` matches
+the configured target, without contacting GitHub or claiming work. Dry-run and
+live tick perform that checkout preflight before tracker access. Source issue
+discovery, admission, labels, dependencies, and comments stay in the source
+repository. Pi runs in the target path. Pull-request reconciliation queries the
+exact source issue's closing-PR connection and filters results to the target
+repository. `tick` is noninteractive and uses a host-local
+advisory lock keyed by canonical source repository identity. Locks live under `$XDG_STATE_HOME/groundskeeper/locks`
 (or `~/.local/state/groundskeeper/locks`), so separate config worktrees for the
 same repository share one host lock. `GROUNDSKEEPER_STATE_HOME` is a narrow
 host/test override. Run exactly one scheduler host for each automation;
 multi-host scheduling is not supported. A tick reconciles running work first,
 then atomically reclaims deferred work, then claims new ready work. A successful
-no-work tick is safe. After any worker return, Groundskeeper first reconciles the
-accepted GitHub result: an open draft PR with the exact closing reference moves
-to review even if the worker reported a late failure. Explicit Codex usage,
+no-work tick is safe. Before dispatch and after any worker return, Groundskeeper
+reconciles the accepted GitHub result: an open draft PR in the target repository
+with the exact repository-qualified source issue closing reference moves to
+review even if the worker reported a late failure. If accepted and violating
+exact target PRs coexist, the accepted draft wins; otherwise a non-draft, closed,
+or merged exact target PR blocks without dispatch. Explicit Codex usage,
 provider rate-limit/HTTP 429, and temporary provider-capacity failures move the
 issue to `factory:deferred` with an actionable comment and are resumed on the
 next tick. Authentication, model configuration, policy, timeout, and ordinary
-worker failures move it to `factory:blocked`. The JSON contract is versioned,
-and dry-run output deliberately omits
+worker failures move it to `factory:blocked`. The breaking source/target JSON
+shape uses envelope version `2`, and dry-run output deliberately omits
 issue bodies. Set a scheduler's working directory to the repository containing
 `.groundskeeper/config.yml`, or pass `gk automation --config PATH ...`.
 
@@ -83,7 +96,8 @@ factory:ready ──claim──> factory:running ──accepted draft PR──> 
 factory:deferred ──next tick claim/resume──> factory:running
 ```
 
-Each issue maps to a deterministic UUIDv5 Pi session and stable run name. Pi
+Each source repository, issue number, and target repository tuple maps to a
+deterministic UUIDv5 Pi session and stable run name. Pi
 output streams to Groundskeeper's stderr for live scheduler logs while the final
 versioned JSON result remains on stdout. Review, deferred, and blocked results
 include the session ID, name, and generic `pi --session ID` resume command;
@@ -104,6 +118,8 @@ blocks the claimed issue with the command error and releases the host lock for r
 If a process exits after claiming an issue, the next tick resumes that session
 and reconciles GitHub state. Issue discovery requests ready, running, and
 deferred labels server-side and is bounded at 1,000 open issues per state.
+Pull request reconciliation inspects the exact source issue's repository-qualified
+closing pull request references and filters them to the configured target repository.
 
 Define AI agent skills as markdown prompt templates. Chain them into workflows. Run them locally or generate GitHub Actions workflows that run them on PRs or schedules.
 

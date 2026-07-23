@@ -32,12 +32,16 @@ gk automation tick NAME [--dry-run] [--json]
 `list` and `show` inspect configured local automations. `inspect` reads tracker
 items and reports Factory Task parsing, dependency resolution, and deterministic
 admission without labels, comments, or worker launch. `show --json` includes
-the resolved repository path, lifecycle labels, runner settings, policy, and
-selected-skill provenance (name, source kind, and path, never the prompt body).
+distinct source queue and target repository/path objects, lifecycle labels,
+runner settings, policy, and selected-skill provenance (name, source kind, and
+path, never the prompt body). `inspect --json` and `tick --json` also expose
+source and target separately while dry-run continues to omit issue bodies.
 `validate --json` returns the same resolved skill provenance after checking it.
 `validate` checks strict config, named-skill resolution, Pi availability, the
-repository path, and the fixed draft-only/never-merge policy without contacting
-GitHub or starting work. `tick` runs one bounded reconciliation pass. Dry-run
+fixed draft-only/never-merge policy, and that the target path is a Git worktree
+whose `origin` identifies `target.repository`, without contacting GitHub or
+starting work. Dry-run and live tick perform the same checkout-identity
+preflight before tracker access. `tick` runs one bounded reconciliation pass. Dry-run
 selects and reports eligible work without labels, comments, or worker launch.
 Invalid, tracking, missing-contract, or unresolved-dependency work reports
 `would-block` in dry-run and transitions to blocked only in a live tick.
@@ -58,11 +62,22 @@ than risk descendants surviving after lock release.
 Pi runner configuration accepts optional `timeout-seconds` (default: 7,200) for
 long-running tasks. GitHub CLI calls use a fixed 30-second timeout. Groundskeeper
 does not sandbox a user-authorized Pi process; it enforces its accepted-result
-postcondition by transitioning to review only for an open draft pull request
-with the exact closing reference.
+postcondition by transitioning to review only for an open draft pull request in
+the target repository with the exact repository-qualified source issue closing
+reference. It queries the exact source issue's documented GraphQL
+`closedByPullRequestsReferences` connection, reads each pull request's repository
+identity, and filters to the configured target. It paginates that relevant
+connection and fails closed if its explicit page budget is exhausted. Before
+worker dispatch, an accepted exact open draft reaches review; otherwise an exact
+non-draft, closed, or merged target PR blocks. If accepted and violating target
+PRs coexist, the accepted open draft wins.
 
-All JSON responses use a versioned envelope:
-`{"version":1,"status":"...","data":{...},"exit_code":N}`. Exit `0` means
+All automation JSON responses use the breaking v2 envelope:
+`{"version":2,"status":"...","data":{...},"exit_code":N}`. `list` and `show`
+place complete definitions under `data.automations[]` and `data.automation`;
+`inspect` returns `data.source`, `data.target`, and `data.tasks[]`; and `tick`
+returns `data.source`, `data.target`, its optional repository-qualified
+`data.task`, result detail, PR URL, and session handoff fields. Exit `0` means
 no work, review-ready work, deferred work, or a successful dry-run. In
 particular, `status: "deferred"` is a nonfatal scheduler result. Exit `2` is a
 configuration, command, tracker, or lock error; `4` is claim contention; and `5`

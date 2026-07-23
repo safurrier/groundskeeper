@@ -61,12 +61,14 @@ class AutomationSkillRenderer:
         return "\n".join(
             (
                 "AUTOMATION_CONTEXT",
-                f"TASK_ID: {normalized.external_id}",
+                f"TASK_ID: {normalized.source_issue.number}",
                 f"TASK_TITLE: {normalized.title}",
                 "TASK_BODY:",
                 normalized.body,
                 f"TASK_URL: {normalized.url}",
                 f"REPOSITORY: {normalized.target_repository}",
+                "FACTORY_CLOSING_REFERENCE: "
+                f"{normalized.source_issue.closing_reference(normalized.target_repository)}",
                 f"FACTORY_TASK_KIND: {contract.kind.value}",
                 f"FACTORY_EXECUTION_MODE: {contract.mode.value if contract.mode else ''}",
                 "FACTORY_DEPENDENCY_STATUS: resolved",
@@ -97,10 +99,18 @@ class PiAutomationRunner:
         self._config = config
 
     def _settings(self, task: AutomationTask) -> PiExecutionSettings:
-        identity = f"groundskeeper:{task.target_repository}:{task.external_id}"
+        source_repository = task.source_issue.repository.casefold()
+        target_repository = task.target_repository.casefold()
+        identity = (
+            f"groundskeeper:{source_repository}:{task.source_issue.number}:"
+            f"{target_repository}"
+        )
         return PiExecutionSettings(
             session_id=str(uuid.uuid5(uuid.NAMESPACE_URL, identity)),
-            name=f"gk-{task.target_repository.replace('/', '-')}-{task.external_id}",
+            name=(
+                f"gk-{source_repository.replace('/', '-')}-{task.source_issue.number}"
+                f"-to-{target_repository.replace('/', '-')}"
+            ),
             approval=self._config.approval,
             timeout_seconds=self._config.timeout_seconds,
         )
