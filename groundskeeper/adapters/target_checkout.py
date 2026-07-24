@@ -10,9 +10,7 @@ from groundskeeper.adapters.process import ProcessClient
 from groundskeeper.domain.automation import canonical_github_repository
 
 GIT_PREFLIGHT_TIMEOUT_SECONDS = 30
-_SCP_GITHUB_REMOTE_RE = re.compile(
-    r"^[^@/:]+@github\.com:(?P<repository>[^/]+/[^/]+)$"
-)
+_SCP_GITHUB_REMOTE_RE = re.compile(r"^[^@/:]+@github\.com:(?P<repository>[^/]+/[^/]+)$")
 
 
 class TargetCheckoutError(RuntimeError):
