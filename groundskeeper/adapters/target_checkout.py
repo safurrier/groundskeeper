@@ -10,7 +10,9 @@ from groundskeeper.adapters.process import ProcessClient
 from groundskeeper.domain.automation import canonical_github_repository
 
 GIT_PREFLIGHT_TIMEOUT_SECONDS = 30
-_SCP_GITHUB_REMOTE_RE = re.compile(r"^git@github\.com:(?P<repository>[^/]+/[^/]+)$")
+_SCP_GITHUB_REMOTE_RE = re.compile(
+    r"^[^@/:]+@github\.com:(?P<repository>[^/]+/[^/]+)$"
+)
 
 
 class TargetCheckoutError(RuntimeError):
@@ -30,10 +32,6 @@ def _repository_from_remote(remote: str) -> str:
         if parsed.scheme not in {"https", "ssh"} or parsed.hostname != "github.com":
             raise TargetCheckoutError(
                 "target checkout origin must be a GitHub HTTPS or SSH remote"
-            )
-        if parsed.scheme == "ssh" and parsed.username != "git":
-            raise TargetCheckoutError(
-                "target checkout origin must use the GitHub SSH git user"
             )
         candidate = parsed.path.removeprefix("/")
     try:

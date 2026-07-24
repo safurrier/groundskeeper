@@ -27,7 +27,9 @@ class FakeProcess:
     [
         "https://github.com/Example/Widgets.git\n",
         "git@github.com:Example/Widgets.git\n",
+        "org-1965106@github.com:Example/Widgets.git\n",
         "ssh://git@github.com/Example/Widgets.git\n",
+        "ssh://org-1965106@github.com/Example/Widgets.git\n",
     ],
 )
 def test_matching_github_https_and_ssh_origins_are_accepted(origin: str) -> None:
