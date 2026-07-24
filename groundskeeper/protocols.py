@@ -9,6 +9,7 @@ from groundskeeper.domain.automation import (
     AdmittedTask,
     AutomationTask,
     ClaimResult,
+    PullRequestReconciliation,
     SessionMetadata,
     TaskState,
     WorkResult,
@@ -60,8 +61,9 @@ class Tracker(Protocol):
     def transition(
         self, task: AutomationTask, state: TaskState, detail: str = ""
     ) -> None: ...
-    def find_pull_request(self, task: AutomationTask) -> str | None: ...
-    def find_policy_violation(self, task: AutomationTask) -> str | None: ...
+    def reconcile_pull_requests(
+        self, task: AutomationTask
+    ) -> PullRequestReconciliation: ...
 
 
 class AutomationRunner(Protocol):

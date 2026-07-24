@@ -1,6 +1,7 @@
 import io
 import json
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -25,6 +26,7 @@ from groundskeeper.domain.automation import (
     AdmittedTask,
     AutomationTask,
     FailureDisposition,
+    GitHubIssueIdentity,
     WorkResult,
 )
 from groundskeeper.domain.config import AutomationPolicy, PiRunnerConfig
@@ -82,12 +84,12 @@ def test_pi_runner_renders_normalized_task_context_with_typed_settings() -> None
     client = FakePiClient()
     task = AutomationTask(
         "github",
-        "3",
         "Fix it",
         "Acceptance",
         "https://issue/3",
         "alex",
-        "me/dots",
+        GitHubIssueIdentity("source/queue", 3),
+        "target/repo",
         contract=_contract(),
     )
     result = _runner(client).run(_admitted(task))
@@ -97,7 +99,8 @@ def test_pi_runner_renders_normalized_task_context_with_typed_settings() -> None
     assert "TASK_TITLE: Fix it" in client.prompt
     assert "TASK_BODY:\nAcceptance" in client.prompt
     assert "TASK_URL: https://issue/3" in client.prompt
-    assert "REPOSITORY: me/dots" in client.prompt
+    assert "REPOSITORY: target/repo" in client.prompt
+    assert "FACTORY_CLOSING_REFERENCE: source/queue#3" in client.prompt
     assert "FACTORY_TASK_KIND: runnable" in client.prompt
     assert "FACTORY_EXECUTION_MODE: full" in client.prompt
     assert "FACTORY_DEPENDENCY_STATUS: resolved" in client.prompt
@@ -105,22 +108,46 @@ def test_pi_runner_renders_normalized_task_context_with_typed_settings() -> None
     assert client.cwd == Path("/repos/dots")
     assert client.settings is not None
     assert client.settings.session_id
-    assert client.settings.name == "gk-me-dots-3"
+    assert client.settings.name == "gk-source-queue-3-to-target-repo"
     assert client.settings.approval == "allow"
     assert client.settings.timeout_seconds == 7200
     assert "POLICY_OUTPUT: draft-pr" in client.prompt
     assert "POLICY_MERGE: never" in client.prompt
     assert f"FACTORY_SESSION_ID: {client.settings.session_id}" in client.prompt
-    assert "FACTORY_SESSION_NAME: gk-me-dots-3" in client.prompt
+    assert "FACTORY_SESSION_NAME: gk-source-queue-3-to-target-repo" in client.prompt
     assert (
         f"FACTORY_RESUME_COMMAND: pi --session {client.settings.session_id}"
         in client.prompt
     )
 
 
+def test_same_repository_task_renders_short_closing_reference() -> None:
+    client = FakePiClient()
+    task = AutomationTask(
+        "github",
+        "Fix it",
+        "Acceptance",
+        "https://issue/3",
+        "alex",
+        GitHubIssueIdentity("target/repo", 3),
+        "target/repo",
+        contract=_contract(),
+    )
+
+    _runner(client).run(_admitted(task))
+
+    assert "FACTORY_CLOSING_REFERENCE: #3" in client.prompt
+
+
 def test_admitted_task_rejects_mismatched_contract() -> None:
     task = AutomationTask(
-        "github", "3", "Fix it", "Acceptance", "https://issue/3", "alex", "me/dots"
+        "github",
+        "Fix it",
+        "Acceptance",
+        "https://issue/3",
+        "alex",
+        GitHubIssueIdentity("source/queue", 3),
+        "target/repo",
     )
 
     with pytest.raises(ValueError, match="requires its normalized contract"):
@@ -131,33 +158,79 @@ def test_pi_runner_exposes_session_metadata_without_starting_worker() -> None:
     client = FakePiClient()
     task = AutomationTask(
         "github",
-        "3",
         "Fix it",
         "Acceptance",
         "https://issue/3",
         "alex",
-        "me/dots",
+        GitHubIssueIdentity("source/queue", 3),
+        "target/repo",
         contract=_contract(),
     )
 
     metadata = _runner(client).session_metadata(task)
 
     assert metadata.session_id
-    assert metadata.session_name == "gk-me-dots-3"
+    assert metadata.session_name == "gk-source-queue-3-to-target-repo"
     assert metadata.resume_command == f"pi --session {metadata.session_id}"
     assert client.settings is None
+
+
+def test_deterministic_session_identity_resists_cross_source_collisions() -> None:
+    client = FakePiClient()
+    first = AutomationTask(
+        "github",
+        "Fix it",
+        "Acceptance",
+        "https://issue/3",
+        "alex",
+        GitHubIssueIdentity("first/queue", 3),
+        "target/repo",
+        contract=_contract(),
+    )
+    second_source = replace(first, source_issue=GitHubIssueIdentity("second/queue", 3))
+    second_target = replace(first, target_repository="other/target")
+    runner = _runner(client)
+
+    first_session = runner.session_metadata(first).session_id
+    assert first_session != runner.session_metadata(second_source).session_id
+    assert first_session != runner.session_metadata(second_target).session_id
+
+
+def test_deterministic_session_identity_is_case_insensitive() -> None:
+    client = FakePiClient()
+    task = AutomationTask(
+        "github",
+        "Fix it",
+        "Acceptance",
+        "https://issue/3",
+        "alex",
+        GitHubIssueIdentity("Source/Queue", 3),
+        "Target/Repo",
+        contract=_contract(),
+    )
+    differently_cased = replace(
+        task,
+        source_issue=GitHubIssueIdentity("source/queue", 3),
+        target_repository="target/repo",
+    )
+    runner = _runner(client)
+
+    assert (
+        runner.session_metadata(task).session_id
+        == runner.session_metadata(differently_cased).session_id
+    )
 
 
 def test_recovery_reuses_deterministic_session_and_changes_only_context() -> None:
     client = FakePiClient()
     task = AutomationTask(
         "github",
-        "3",
         "Fix it",
         "Acceptance",
         "https://issue/3",
         "alex",
-        "me/dots",
+        GitHubIssueIdentity("source/queue", 3),
+        "target/repo",
         contract=_contract(),
     )
     runner = _runner(client)

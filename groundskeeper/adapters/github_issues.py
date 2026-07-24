@@ -11,6 +11,8 @@ from groundskeeper.domain.automation import (
     AdmittedTask,
     AutomationTask,
     ClaimResult,
+    GitHubIssueIdentity,
+    PullRequestReconciliation,
     TaskState,
 )
 from groundskeeper.domain.config import GitHubIssuesSource
@@ -23,9 +25,12 @@ from groundskeeper.domain.task_contract import (
 
 
 class GitHubIssuesTracker:
-    def __init__(self, client: GhClient, source: GitHubIssuesSource) -> None:
+    def __init__(
+        self, client: GhClient, source: GitHubIssuesSource, target_repository: str
+    ) -> None:
         self._client = client
         self._source = source
+        self._target_repository = target_repository
 
     def list_ready(self) -> list[AutomationTask]:
         return self._list_in_state(self._source.ready_label, TaskState.READY)
@@ -47,18 +52,20 @@ class GitHubIssuesTracker:
     def _task_from_issue(self, issue: GhIssue, state: TaskState) -> AutomationTask:
         return AutomationTask(
             provider="github-issues",
-            external_id=str(issue.number),
             title=issue.title,
             body=issue.body,
             url=issue.url,
             author=issue.author,
-            target_repository=self._source.repository,
+            source_issue=GitHubIssueIdentity(self._source.repository, issue.number),
+            target_repository=self._target_repository,
             state=state,
         )
 
     def refresh(self, task: AutomationTask) -> AutomationTask:
         """Read and verify the current task immediately before execution."""
-        issue = self._client.get_issue(self._source.repository, int(task.external_id))
+        issue = self._client.get_issue(
+            self._source.repository, task.source_issue.number
+        )
         if issue.author not in self._source.trusted_authors:
             raise RuntimeError("task author is no longer trusted")
         if issue.state != "open":
@@ -119,13 +126,13 @@ class GitHubIssuesTracker:
                 False, task, f"task cannot be claimed from {task.state.value}"
             )
         list_tasks, source_label = queue
-        current = {item.external_id: item for item in list_tasks()}
-        current_task = current.get(task.external_id)
+        current = {item.source_issue.number: item for item in list_tasks()}
+        current_task = current.get(task.source_issue.number)
         if current_task is None:
             return ClaimResult(False, task, f"task is no longer {task.state.value}")
         self._client.replace_label(
             self._source.repository,
-            int(task.external_id),
+            task.source_issue.number,
             source_label,
             self._source.running_label,
         )
@@ -153,21 +160,18 @@ class GitHubIssuesTracker:
             TaskState.BLOCKED: self._source.blocked_label,
         }[task.state]
         self._client.replace_label(
-            self._source.repository, int(task.external_id), old, target
+            self._source.repository, task.source_issue.number, old, target
         )
         if detail:
             self._client.comment(
                 self._source.repository,
-                int(task.external_id),
+                task.source_issue.number,
                 f"AI-authored factory update: {detail}",
             )
 
-    def find_pull_request(self, task: AutomationTask) -> str | None:
-        return self._client.linked_pull_request(
-            self._source.repository, int(task.external_id)
-        )
-
-    def find_policy_violation(self, task: AutomationTask) -> str | None:
-        return self._client.closing_pr_policy_violation(
-            self._source.repository, int(task.external_id)
+    def reconcile_pull_requests(
+        self, task: AutomationTask
+    ) -> PullRequestReconciliation:
+        return self._client.reconcile_pull_requests(
+            task.target_repository, task.source_issue
         )

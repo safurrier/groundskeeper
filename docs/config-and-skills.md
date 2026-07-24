@@ -21,15 +21,20 @@ and dispatch it through one named Groundskeeper skill.
 
 The initial provider pair is `source.type: github-issues` and `runner.type: pi`.
 A Pi runner must explicitly name `skill`, use `approval: allow`, and use
-`session: deterministic`. Each source requires `repository`, `repository-path`,
-and at least one `trusted-author`. Safety policy is strict: concurrency is `1`,
-output is `draft-pr`, and merge is `never`. Groundskeeper validates this policy
-and enforces the accepted-result postcondition: only an open draft pull request
-with the exact closing reference reaches review. It does not sandbox a
-user-authorized Pi process. An automation skill receives normalized `TASK_ID`,
-`TASK_TITLE`, `TASK_BODY`, `TASK_URL`, `REPOSITORY`, `RECOVERY_CONTEXT`, and
-`POLICY_CONCURRENCY`, `POLICY_OUTPUT`, and `POLICY_MERGE`; ordinary skill
-rendering is unchanged.
+`session: deterministic`. Every automation requires an explicit `source` and
+`target`. Source and target repositories must be canonical `owner/repo`
+identities. The source requires `repository` and at least one `trusted-author`;
+the target requires `repository` and an absolute `repository-path`. Validation,
+dry-run, and live tick prove that path is a Git worktree whose `origin` GitHub
+HTTPS or SSH remote matches the configured target before tracker access. Safety
+policy is strict: concurrency is `1`, output is `draft-pr`, and merge is `never`.
+Groundskeeper validates this policy and enforces the accepted-result
+postcondition: only an open draft pull request in the target repository that
+closes the exact repository-qualified source issue reaches review. It does not
+sandbox a user-authorized Pi process. An automation skill receives normalized
+`TASK_ID`, `TASK_TITLE`, `TASK_BODY`, `TASK_URL`, target `REPOSITORY`, typed
+`FACTORY_CLOSING_REFERENCE`, `RECOVERY_CONTEXT`, and `POLICY_CONCURRENCY`,
+`POLICY_OUTPUT`, and `POLICY_MERGE`; ordinary skill rendering is unchanged.
 
 Every GitHub Issues automation task must begin with exactly these first two H2
 sections. The contract sections cannot contain comments or fenced examples:
@@ -63,8 +68,7 @@ below; every override must be a non-empty string and all five must be distinct:
 ```yaml
 source:
   type: github-issues
-  repository: example/widgets
-  repository-path: /srv/widgets
+  repository: example/work-factory
   trusted-authors: [maintainer]
   labels:
     ready: factory:ready
@@ -72,12 +76,18 @@ source:
     deferred: factory:deferred
     review: factory:review
     blocked: factory:blocked
+target:
+  repository: example/widgets
+  repository-path: /srv/widgets
 ```
 
 Pi runners accept optional positive `timeout-seconds` (default: `7200`) for
 long-running development work. GitHub CLI operations use a fixed 30-second
-timeout. After any worker return, Groundskeeper first reconciles the accepted
-open-draft closing PR. Explicit Codex usage-limit, rate-limit/HTTP 429, and
+timeout. Before dispatch and after any worker return, Groundskeeper reconciles the exact
+source issue's closing-PR connection, filtered to the target repository. An
+accepted open draft wins if accepted and violating PRs coexist; otherwise an
+exact non-draft, closed, or merged target PR blocks without dispatch. Explicit
+Codex usage-limit, rate-limit/HTTP 429, and
 temporary provider-capacity failures then move running work to deferred for a
 deterministic-session resume on the next tick. Authentication, missing or
 misconfigured models, policy failures, ordinary worker failures, and Pi timeouts
@@ -87,9 +97,10 @@ and a next action. Valid bounded content becomes the blocked issue explanation;
 malformed, oversized, or absent markers use the generic fallback, and arbitrary
 worker stdout remains local. The host lock is released when the tick exits.
 Automation entries are strict:
-unknown keys are rejected at the entry, source, runner, policy, and labels
-levels. For example, use `timeout-seconds`, not `timeout_seconds`, and
-`concurrency`, not `concurency`. A misspelled top-level `automation:` key is
+unknown keys are rejected at the entry, source, target, runner, policy, and
+labels levels. The removed source-level `repository-path` is rejected as an unknown
+key. For example, use target `repository-path`, `timeout-seconds`, not
+`timeout_seconds`, and `concurrency`, not `concurency`. A misspelled top-level `automation:` key is
 rejected; legacy top-level workflow configuration remains valid. See the README
 for a complete configuration.
 

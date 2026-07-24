@@ -8,10 +8,38 @@ from pathlib import Path
 from typing import cast
 
 from groundskeeper.adapters.process import ProcessClient
+from groundskeeper.domain.automation import (
+    GitHubIssueIdentity,
+    PullRequestReconciliation,
+    canonical_github_repository,
+)
 from groundskeeper.domain.task_contract import DependencyState, GitHubDependency
 
 GH_QUERY_TIMEOUT_SECONDS = 30
 GH_MUTATION_TIMEOUT_SECONDS = 30
+GH_CLOSING_PULL_REQUEST_PAGE_LIMIT = 10
+
+_ISSUE_CLOSING_PULL_REQUESTS_QUERY = """
+query($owner: String!, $name: String!, $number: Int!, $endCursor: String) {
+  repository(owner: $owner, name: $name) {
+    issue(number: $number) {
+      closedByPullRequestsReferences(
+        first: 100
+        after: $endCursor
+        includeClosedPrs: true
+      ) {
+        nodes {
+          url
+          isDraft
+          state
+          repository { nameWithOwner }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}
+""".strip()
 
 
 class GhError(RuntimeError):
@@ -219,115 +247,145 @@ class GhClient:
             f"Dependency issue has unknown state: {dependency.url}",
         )
 
-    def linked_pull_request(self, repository: str, issue: int) -> str | None:
-        result = self._process.run(
-            (
-                "gh",
-                "pr",
-                "list",
-                "--repo",
-                repository,
-                "--state",
-                "open",
-                "--json",
-                "url,isDraft,closingIssuesReferences",
-                "--limit",
-                "1000",
-            ),
-            self._cwd,
-            timeout=GH_QUERY_TIMEOUT_SECONDS,
-        )
-        if not result.success:
-            raise GhError(result.stderr.strip() or "failed to query pull requests")
-        values = self._parse_json(result.stdout, "pull request list")
-        if not isinstance(values, list):
-            raise GhError("gh pr list returned an unexpected JSON shape")
-        try:
-            for pull_request in cast(list[object], values):
-                if not isinstance(pull_request, dict):
-                    raise TypeError
-                pr_data = cast(dict[str, object], pull_request)
-                if pr_data.get("isDraft") is not True:
-                    continue
-                references = pr_data.get("closingIssuesReferences")
-                if not isinstance(references, list):
-                    raise TypeError
-                closes_issue = False
-                for reference in cast(list[object], references):
-                    if not isinstance(reference, dict):
-                        raise TypeError
-                    reference_data = cast(dict[str, object], reference)
-                    number = reference_data.get("number")
-                    if not isinstance(number, (int, str)):
-                        raise TypeError
-                    if int(number) == issue:
-                        closes_issue = True
-                if closes_issue:
-                    return str(pr_data["url"])
-            return None
-        except (KeyError, TypeError, ValueError) as error:
-            raise GhError("gh pr list returned incomplete pull request data") from error
+    def reconcile_pull_requests(
+        self, target_repository: str, source_issue: GitHubIssueIdentity
+    ) -> PullRequestReconciliation:
+        """Read PRs that GitHub records as closing the exact source issue.
 
-    def closing_pr_policy_violation(self, repository: str, issue: int) -> str | None:
-        """Report a closing PR that fails the accepted draft-result postcondition."""
-        result = self._process.run(
-            (
+        The documented issue-rooted connection avoids scanning unrelated target
+        pull requests. An accepted open draft wins if accepted and violating
+        target PRs coexist; otherwise the first target policy violation blocks.
+        """
+        canonical_github_repository(target_repository)
+        owner, name = source_issue.repository.split("/")
+        pull_requests: list[dict[str, object]] = []
+        end_cursor: str | None = None
+        for page_number in range(GH_CLOSING_PULL_REQUEST_PAGE_LIMIT):
+            argv = [
                 "gh",
-                "pr",
-                "list",
-                "--repo",
-                repository,
-                "--state",
-                "all",
-                "--json",
-                "url,isDraft,state,closingIssuesReferences",
-                "--limit",
-                "1000",
-            ),
-            self._cwd,
-            timeout=GH_QUERY_TIMEOUT_SECONDS,
-        )
-        if not result.success:
-            raise GhError(
-                result.stderr.strip() or "failed to query pull request policy"
+                "api",
+                "graphql",
+                "-f",
+                f"query={_ISSUE_CLOSING_PULL_REQUESTS_QUERY}",
+                "-F",
+                f"owner={owner}",
+                "-F",
+                f"name={name}",
+                "-F",
+                f"number={source_issue.number}",
+            ]
+            if end_cursor is not None:
+                argv.extend(("-F", f"endCursor={end_cursor}"))
+            result = self._process.run(
+                tuple(argv), self._cwd, timeout=GH_QUERY_TIMEOUT_SECONDS
             )
-        values = self._parse_json(result.stdout, "pull request policy query")
-        if not isinstance(values, list):
-            raise GhError("gh pr list returned an unexpected JSON shape")
-        try:
-            for pull_request in cast(list[object], values):
-                if not isinstance(pull_request, dict):
-                    raise TypeError
-                pr_data = cast(dict[str, object], pull_request)
-                if not self._closes_issue(pr_data, issue):
-                    continue
-                url = pr_data.get("url")
-                if not isinstance(url, str):
-                    raise TypeError
-                if pr_data.get("isDraft") is not True:
-                    return f"Closing pull request is not a draft: {url}"
-                state = pr_data.get("state")
-                if state != "OPEN":
-                    return f"Closing pull request is not open: {url}"
-            return None
-        except (TypeError, ValueError) as error:
-            raise GhError("gh pr list returned incomplete pull request data") from error
+            if not result.success:
+                raise GhError(
+                    result.stderr.strip() or "failed to query closing pull requests"
+                )
+            page = self._parse_json(result.stdout, "closing pull request GraphQL query")
+            nodes, end_cursor = self._parse_closing_pull_request_page(page)
+            try:
+                pull_requests.extend(
+                    self._parse_closing_pull_request(node) for node in nodes
+                )
+            except (TypeError, ValueError) as error:
+                raise GhError(
+                    "gh GraphQL returned incomplete closing pull request data"
+                ) from error
+            if end_cursor is None:
+                break
+            if page_number == GH_CLOSING_PULL_REQUEST_PAGE_LIMIT - 1:
+                raise GhError(
+                    "closing pull request query exceeded the supported page limit"
+                )
+
+        accepted_url: str | None = None
+        policy_violation: str | None = None
+        for pr_data in pull_requests:
+            repository = cast(str, pr_data["repository"])
+            if repository.casefold() != target_repository.casefold():
+                continue
+            url = cast(str, pr_data["url"])
+            if pr_data["isDraft"] is True and pr_data["state"] == "OPEN":
+                accepted_url = accepted_url or url
+                continue
+            if policy_violation is None:
+                if pr_data["isDraft"] is not True:
+                    policy_violation = f"Closing pull request is not a draft: {url}"
+                else:
+                    policy_violation = f"Closing pull request is not open: {url}"
+        return PullRequestReconciliation(accepted_url, policy_violation)
 
     @staticmethod
-    def _closes_issue(pr_data: dict[str, object], issue: int) -> bool:
-        """Return whether a pull request has the exact closing reference."""
-        references = pr_data.get("closingIssuesReferences")
-        if not isinstance(references, list):
+    def _parse_closing_pull_request_page(
+        value: object,
+    ) -> tuple[list[object], str | None]:
+        try:
+            if not isinstance(value, dict):
+                raise TypeError
+            data = cast(dict[str, object], value).get("data")
+            if not isinstance(data, dict):
+                raise TypeError
+            repository_data = cast(dict[str, object], data).get("repository")
+            if not isinstance(repository_data, dict):
+                raise TypeError
+            issue = cast(dict[str, object], repository_data).get("issue")
+            if not isinstance(issue, dict):
+                raise TypeError
+            connection = cast(dict[str, object], issue).get(
+                "closedByPullRequestsReferences"
+            )
+            if not isinstance(connection, dict):
+                raise TypeError
+            connection_data = cast(dict[str, object], connection)
+            nodes = connection_data.get("nodes")
+            page_info = connection_data.get("pageInfo")
+            if not isinstance(nodes, list) or not isinstance(page_info, dict):
+                raise TypeError
+            page_info_data = cast(dict[str, object], page_info)
+            has_next_page = page_info_data.get("hasNextPage")
+            cursor = page_info_data.get("endCursor")
+            if not isinstance(has_next_page, bool):
+                raise TypeError
+            if has_next_page:
+                if not isinstance(cursor, str) or not cursor:
+                    raise TypeError
+                return cast(list[object], nodes), cursor
+            if cursor is not None and not isinstance(cursor, str):
+                raise TypeError
+            return cast(list[object], nodes), None
+        except (KeyError, TypeError, ValueError) as error:
+            raise GhError(
+                "gh GraphQL returned incomplete closing pull request data"
+            ) from error
+
+    @staticmethod
+    def _parse_closing_pull_request(value: object) -> dict[str, object]:
+        if not isinstance(value, dict):
             raise TypeError
-        for reference in cast(list[object], references):
-            if not isinstance(reference, dict):
-                raise TypeError
-            number = cast(dict[str, object], reference).get("number")
-            if not isinstance(number, (int, str)):
-                raise TypeError
-            if int(number) == issue:
-                return True
-        return False
+        pr_data = cast(dict[str, object], value)
+        url = pr_data.get("url")
+        is_draft = pr_data.get("isDraft")
+        state = pr_data.get("state")
+        repository = pr_data.get("repository")
+        if (
+            not isinstance(url, str)
+            or not isinstance(is_draft, bool)
+            or state not in {"OPEN", "CLOSED", "MERGED"}
+            or not isinstance(repository, dict)
+        ):
+            raise TypeError
+        name_with_owner = cast(dict[str, object], repository).get("nameWithOwner")
+        if not isinstance(name_with_owner, str):
+            raise TypeError
+        canonical_github_repository(name_with_owner)
+        return {
+            "url": url,
+            "isDraft": is_draft,
+            "state": state,
+            "repository": name_with_owner,
+        }
 
     @staticmethod
     def _parse_json(value: str, operation: str) -> object:

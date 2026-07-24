@@ -79,22 +79,26 @@ For workflows: steps execute sequentially. `ParallelGroup` steps use `ThreadPool
 
 ```text
 automation config
-  → strict source, runner, labels, timeout, and policy parsing
+  → strict source queue, target repository/path, runner, labels, timeout, and policy parsing
   → resolve configured skill with provenance
-  → acquire stable host-state lock for normalized repository identity
+  → prove target path is a Git worktree whose origin matches target repository
+  → acquire stable host-state lock for canonical source repository identity
   → reconcile running issues before deferred work before ready work
   → parse one exact Factory Task + Dependencies contract and resolve dependency state
   → block malformed, tracking, inaccessible, unresolved, or closed-unmerged dependency work before Pi
   → atomically claim at most one admitted trusted deferred or ready task
-  → render configured skill + typed task-contract/recovery/policy/session context
+  → normalize the repository-qualified source issue and explicit target identity
+  → render configured skill + typed closing/task-contract/recovery/policy/session context
   → require POSIX process-group isolation
-  → run Pi in a deterministic session with a bounded process group
+  → run Pi in the target checkout with a deterministic session keyed by source + issue + target
       stdout + stderr → separately preserved and tee'd to live scheduler logs
       stdout → PR URL parsing + strict public blocker marker extraction
       stderr → transient/durable provider failure classification
   → reconcile GitHub as the durable result authority
-      exact closing open draft PR → review
-      non-draft, closed, or merged closing PR → blocked policy violation
+      exact source issue's closedByPullRequestsReferences filtered to target repository
+      accepted open target draft PR → review (wins if a violating PR also exists)
+      otherwise non-draft, closed, or merged target closing PR → blocked policy violation
+      explicit closing-PR page exhaustion → indeterminate error without lifecycle mutation
       no accepted PR + explicit transient provider exhaustion → deferred
       no accepted PR + durable/ordinary worker failure → blocked worker error
       valid public blocker marker → bounded summary + next action in issue comment
@@ -115,8 +119,10 @@ Deferred claims return the issue to `running` before Pi resumes the same UUIDv5
 session. A repeat transient failure returns it to `deferred`; a later accepted
 draft PR reaches `review`.
 
-The workflow instructions belong to the configured skill; the Pi adapter knows
-only how to execute a rendered prompt. `merge: never` is an accepted-result
+The source repository owns discovery, admission, dependencies, labels, comments,
+and lifecycle. The target repository/path owns Pi cwd, rendered `REPOSITORY`,
+and accepted draft PR discovery. The workflow instructions belong to the
+configured skill; the Pi adapter knows only how to execute a rendered prompt. `merge: never` is an accepted-result
 contract, not a credential sandbox. Host-state locking coordinates config
 worktrees on one machine and does not provide distributed locking.
 

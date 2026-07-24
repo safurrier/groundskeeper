@@ -10,6 +10,7 @@ from typing import Any, Literal, cast
 
 import yaml
 
+from groundskeeper.domain.automation import canonical_github_repository
 from groundskeeper.domain.errors import ConfigError
 from groundskeeper.domain.triggers import (
     EventTrigger,
@@ -131,13 +132,20 @@ class GitHubIssuesSource:
     """GitHub-specific queue configuration confined to its adapter."""
 
     repository: str
-    repository_path: Path
     trusted_authors: tuple[str, ...]
     ready_label: str = "factory:ready"
     running_label: str = "factory:running"
     review_label: str = "factory:review"
     blocked_label: str = "factory:blocked"
     deferred_label: str = "factory:deferred"
+
+
+@dataclass(frozen=True)
+class AutomationTarget:
+    """Repository and checkout where the implementation worker runs."""
+
+    repository: str
+    repository_path: Path
 
 
 @dataclass(frozen=True)
@@ -166,6 +174,7 @@ class Automation:
 
     name: str
     source: GitHubIssuesSource
+    target: AutomationTarget
     runner: PiRunnerConfig
     policy: AutomationPolicy = field(default_factory=AutomationPolicy)
 
@@ -353,9 +362,10 @@ def get_automations(config: Mapping[str, object]) -> list[Automation]:
         entry_path = f"automations.{name}"
         value = _automation_mapping(value, entry_path)
         _reject_unknown_automation_keys(
-            value, {"source", "runner", "policy"}, entry_path
+            value, {"source", "target", "runner", "policy"}, entry_path
         )
         source = value.get("source")
+        target = value.get("target")
         runner = value.get("runner")
         policy = value.get("policy", {})
         if not isinstance(source, dict):
@@ -369,8 +379,16 @@ def get_automations(config: Mapping[str, object]) -> list[Automation]:
             )
         _reject_unknown_automation_keys(
             source,
-            {"type", "repository", "repository-path", "trusted-authors", "labels"},
+            {"type", "repository", "trusted-authors", "labels"},
             f"{entry_path}.source",
+        )
+        if not isinstance(target, dict):
+            raise ConfigError(f"Automation '{name}' requires target")
+        target = _automation_mapping(target, f"{entry_path}.target")
+        _reject_unknown_automation_keys(
+            target,
+            {"repository", "repository-path"},
+            f"{entry_path}.target",
         )
         if not isinstance(runner, dict):
             raise ConfigError(f"Automation '{name}' requires runner.type: pi")
@@ -408,13 +426,28 @@ def get_automations(config: Mapping[str, object]) -> list[Automation]:
             f"{entry_path}.policy",
             {"concurency": "concurrency"},
         )
-        repository = source.get("repository")
-        repository_path = source.get("repository-path")
+        source_repository = source.get("repository")
+        target_repository = target.get("repository")
+        repository_path = target.get("repository-path")
         authors = source.get("trusted-authors")
-        if not isinstance(repository, str) or not repository:
+        if not isinstance(source_repository, str) or not source_repository:
             raise ConfigError(f"Automation '{name}' requires source.repository")
+        if not isinstance(target_repository, str) or not target_repository:
+            raise ConfigError(f"Automation '{name}' requires target.repository")
+        try:
+            source_repository = canonical_github_repository(source_repository)
+        except ValueError as error:
+            raise ConfigError(
+                f"Automation '{name}' source.repository must be canonical owner/repo"
+            ) from error
+        try:
+            target_repository = canonical_github_repository(target_repository)
+        except ValueError as error:
+            raise ConfigError(
+                f"Automation '{name}' target.repository must be canonical owner/repo"
+            ) from error
         if not isinstance(repository_path, str) or not repository_path:
-            raise ConfigError(f"Automation '{name}' requires source.repository-path")
+            raise ConfigError(f"Automation '{name}' requires target.repository-path")
         if (
             not isinstance(authors, list)
             or not authors
@@ -457,20 +490,23 @@ def get_automations(config: Mapping[str, object]) -> list[Automation]:
         path = Path(repository_path).expanduser()
         if not path.is_absolute():
             raise ConfigError(
-                f"Automation '{name}' source.repository-path must be absolute"
+                f"Automation '{name}' target.repository-path must be absolute"
             )
         automations.append(
             Automation(
                 name=str(name),
                 source=GitHubIssuesSource(
-                    repository=repository,
-                    repository_path=path.resolve(),
+                    repository=source_repository,
                     trusted_authors=tuple(cast(list[str], authors)),
                     ready_label=resolved_labels["ready"],
                     running_label=resolved_labels["running"],
                     review_label=resolved_labels["review"],
                     blocked_label=resolved_labels["blocked"],
                     deferred_label=resolved_labels["deferred"],
+                ),
+                target=AutomationTarget(
+                    repository=target_repository,
+                    repository_path=path.resolve(),
                 ),
                 runner=PiRunnerConfig(skill=skill, timeout_seconds=timeout_seconds),
                 policy=AutomationPolicy(),
