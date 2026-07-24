@@ -324,14 +324,21 @@ class TestAutomationE2E:
         assert validated_automation["target"]["repository"] == "target/repo"
         assert json.loads(validated.stdout)["version"] == 2
 
-    def test_dry_run_is_compact_and_does_not_launch_pi(self, tmp_path: Path) -> None:
+    def test_dry_run_is_compact_and_does_not_launch_pi_or_write_state(
+        self, tmp_path: Path
+    ) -> None:
         repo, env = _factory_flow_repo(tmp_path, "ready")
+        state_home = tmp_path / "state"
+        env["GROUNDSKEEPER_STATE_HOME"] = str(state_home)
+
         result = run_gk(
             "automation", "tick", "daily", "--dry-run", "--json", cwd=repo, env=env
         )
+
         assert result.returncode == 0
         assert json.loads(result.stdout)["status"] == "would-dispatch"
         assert "Factory Task" not in result.stdout
+        assert not state_home.exists()
 
     def test_inspect_reports_typed_admission_without_mutation(
         self, tmp_path: Path

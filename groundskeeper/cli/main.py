@@ -531,11 +531,13 @@ def automation_tick(
             definition.source,
             definition.target.repository,
         )
-        lock_path = _automation_lock_path(definition)
-        with TickLock(lock_path):
-            result = AutomationService(tracker, runner).tick(
-                definition, dry_run=dry_run
-            )
+        service = AutomationService(tracker, runner)
+        if dry_run:
+            result = service.tick(definition, dry_run=True)
+        else:
+            lock_path = _automation_lock_path(definition)
+            with TickLock(lock_path):
+                result = service.tick(definition, dry_run=False)
     except (ConfigError, RuntimeError) as error:
         _automation_error(str(error), json_output)
         return
