@@ -786,12 +786,16 @@
 <p><code>list</code> and <code>show</code> inspect configured local automations. <code>inspect</code> reads tracker
 items and reports Factory Task parsing, dependency resolution, and deterministic
 admission without labels, comments, or worker launch. <code>show --json</code> includes
-the resolved repository path, lifecycle labels, runner settings, policy, and
-selected-skill provenance (name, source kind, and path, never the prompt body).
+distinct source queue and target repository/path objects, lifecycle labels,
+runner settings, policy, and selected-skill provenance (name, source kind, and
+path, never the prompt body). <code>inspect --json</code> and <code>tick --json</code> also expose
+source and target separately while dry-run continues to omit issue bodies.
 <code>validate --json</code> returns the same resolved skill provenance after checking it.
 <code>validate</code> checks strict config, named-skill resolution, Pi availability, the
-repository path, and the fixed draft-only/never-merge policy without contacting
-GitHub or starting work. <code>tick</code> runs one bounded reconciliation pass. Dry-run
+fixed draft-only/never-merge policy, and that the target path is a Git worktree
+whose <code>origin</code> identifies <code>target.repository</code>, without contacting GitHub or
+starting work. Dry-run and live tick perform the same checkout-identity
+preflight before tracker access. <code>tick</code> runs one bounded reconciliation pass. Dry-run
 selects and reports eligible work without labels, comments, or worker launch.
 Invalid, tracking, missing-contract, or unresolved-dependency work reports
 <code>would-block</code> in dry-run and transitions to blocked only in a live tick.
@@ -811,10 +815,21 @@ than risk descendants surviving after lock release.</p>
 <p>Pi runner configuration accepts optional <code>timeout-seconds</code> (default: 7,200) for
 long-running tasks. GitHub CLI calls use a fixed 30-second timeout. Groundskeeper
 does not sandbox a user-authorized Pi process; it enforces its accepted-result
-postcondition by transitioning to review only for an open draft pull request
-with the exact closing reference.</p>
-<p>All JSON responses use a versioned envelope:
-<code>{"version":1,"status":"...","data":{...},"exit_code":N}</code>. Exit <code>0</code> means
+postcondition by transitioning to review only for an open draft pull request in
+the target repository with the exact repository-qualified source issue closing
+reference. It queries the exact source issue's documented GraphQL
+<code>closedByPullRequestsReferences</code> connection, reads each pull request's repository
+identity, and filters to the configured target. It paginates that relevant
+connection and fails closed if its explicit page budget is exhausted. Before
+worker dispatch, an accepted exact open draft reaches review; otherwise an exact
+non-draft, closed, or merged target PR blocks. If accepted and violating target
+PRs coexist, the accepted open draft wins.</p>
+<p>All automation JSON responses use the breaking v2 envelope:
+<code>{"version":2,"status":"...","data":{...},"exit_code":N}</code>. <code>list</code> and <code>show</code>
+place complete definitions under <code>data.automations[]</code> and <code>data.automation</code>;
+<code>inspect</code> returns <code>data.source</code>, <code>data.target</code>, and <code>data.tasks[]</code>; and <code>tick</code>
+returns <code>data.source</code>, <code>data.target</code>, its optional repository-qualified
+<code>data.task</code>, result detail, PR URL, and session handoff fields. Exit <code>0</code> means
 no work, review-ready work, deferred work, or a successful dry-run. In
 particular, <code>status: "deferred"</code> is a nonfatal scheduler result. Exit <code>2</code> is a
 configuration, command, tracker, or lock error; <code>4</code> is claim contention; and <code>5</code>
