@@ -3,7 +3,12 @@ from pathlib import Path
 
 import pytest
 
-from groundskeeper.adapters.gh import GH_QUERY_TIMEOUT_SECONDS, GhClient, GhError
+from groundskeeper.adapters.gh import (
+    GH_BRANCH_PULL_REQUEST_LIMIT,
+    GH_QUERY_TIMEOUT_SECONDS,
+    GhClient,
+    GhError,
+)
 from groundskeeper.adapters.process import CommandResult
 from groundskeeper.domain.automation import GitHubIssueIdentity
 from groundskeeper.domain.task_contract import DependencyState, GitHubDependency
@@ -61,6 +66,23 @@ def _pr(
         "isDraft": draft,
         "state": state,
         "repository": {"nameWithOwner": repository},
+    }
+
+
+def _branch_pr(
+    url: str,
+    repository: str,
+    branch: str,
+    *,
+    draft: bool = True,
+    state: str = "OPEN",
+) -> dict[str, object]:
+    return {
+        "url": url,
+        "isDraft": draft,
+        "state": state,
+        "headRefName": branch,
+        "headRepository": {"nameWithOwner": repository},
     }
 
 
@@ -239,6 +261,102 @@ def test_reconciliation_reports_accepted_and_violating_coexistence() -> None:
 
     assert result.accepted_url == "https://pr/accepted"
     assert result.policy_violation is not None
+
+
+def test_branch_reconciliation_filters_exact_target_and_head_branch() -> None:
+    branch = "groundskeeper/task-abc123"
+    process = FakeProcess(
+        json.dumps(
+            [
+                _branch_pr("https://pr/other-repo", "other/repo", branch),
+                _branch_pr("https://pr/other-branch", "target/repo", "feature"),
+                _branch_pr("https://pr/exact", "target/repo", branch),
+            ]
+        )
+    )
+
+    result = GhClient(process, Path(".")).reconcile_branch_pull_requests(
+        "target/repo", branch
+    )
+
+    assert result.accepted_url == "https://pr/exact"
+    assert result.policy_violation is None
+    assert process.argv[:3] == ("gh", "pr", "list")
+    assert process.argv[process.argv.index("--repo") + 1] == "target/repo"
+    assert process.argv[process.argv.index("--head") + 1] == branch
+    assert process.argv[process.argv.index("--state") + 1] == "all"
+
+
+def test_branch_reconciliation_fails_closed_when_result_limit_is_reached() -> None:
+    branch = "groundskeeper/task-abc123"
+    payload = json.dumps(
+        [
+            _branch_pr(f"https://pr/{number}", "target/repo", branch)
+            for number in range(GH_BRANCH_PULL_REQUEST_LIMIT)
+        ]
+    )
+
+    with pytest.raises(GhError, match="reached the supported result limit"):
+        GhClient(FakeProcess(payload), Path(".")).reconcile_branch_pull_requests(
+            "target/repo", branch
+        )
+
+
+@pytest.mark.parametrize(
+    ("draft", "state", "expected"),
+    [
+        (False, "OPEN", "not a draft"),
+        (True, "CLOSED", "not open"),
+        (True, "MERGED", "not open"),
+    ],
+)
+def test_branch_reconciliation_rejects_non_draft_or_closed_pr(
+    draft: bool, state: str, expected: str
+) -> None:
+    branch = "groundskeeper/task-abc123"
+    process = FakeProcess(
+        json.dumps(
+            [
+                _branch_pr(
+                    "https://pr/invalid",
+                    "target/repo",
+                    branch,
+                    draft=draft,
+                    state=state,
+                )
+            ]
+        )
+    )
+
+    result = GhClient(process, Path(".")).reconcile_branch_pull_requests(
+        "target/repo", branch
+    )
+
+    assert result.policy_violation is not None
+    assert expected in result.policy_violation
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "{}",
+        json.dumps(
+            [
+                {
+                    "url": "https://pr/incomplete",
+                    "isDraft": True,
+                    "state": "OPEN",
+                    "headRefName": "groundskeeper/task-abc123",
+                }
+            ]
+        ),
+    ],
+)
+def test_incomplete_branch_pull_request_payload_is_rejected(payload: str) -> None:
+    with pytest.raises(GhError):
+        GhClient(FakeProcess(payload), Path(".")).reconcile_branch_pull_requests(
+            "target/repo", "groundskeeper/task-abc123"
+        )
 
 
 @pytest.mark.parametrize(

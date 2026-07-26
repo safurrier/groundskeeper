@@ -83,17 +83,28 @@ class AutomationSkillRenderer:
         )
         normalized = task.task
         contract = task.contract
-        return "\n".join(
+        context = [
+            "AUTOMATION_CONTEXT",
+            f"TASK_ID: {normalized.source_issue.number}",
+            f"TASK_TITLE: {normalized.title}",
+            "TASK_BODY:",
+            normalized.body,
+            f"TASK_URL: {normalized.url}",
+            f"REPOSITORY: {normalized.target_repository}",
+            f"POLICY_LINK_SOURCE_ISSUE: {str(policy.link_source_issue).lower()}",
+            "POLICY_INCLUDE_FACTORY_SESSION: "
+            f"{str(policy.include_factory_session).lower()}",
+            f"POLICY_INCLUDE_PI_RESUME: {str(policy.include_pi_resume).lower()}",
+        ]
+        if policy.link_source_issue:
+            context.extend(
+                (
+                    "FACTORY_CLOSING_REFERENCE: "
+                    f"{normalized.source_issue.closing_reference(normalized.target_repository)}",
+                )
+            )
+        context.extend(
             (
-                "AUTOMATION_CONTEXT",
-                f"TASK_ID: {normalized.source_issue.number}",
-                f"TASK_TITLE: {normalized.title}",
-                "TASK_BODY:",
-                normalized.body,
-                f"TASK_URL: {normalized.url}",
-                f"REPOSITORY: {normalized.target_repository}",
-                "FACTORY_CLOSING_REFERENCE: "
-                f"{normalized.source_issue.closing_reference(normalized.target_repository)}",
                 f"FACTORY_TASK_KIND: {contract.kind.value}",
                 f"FACTORY_EXECUTION_MODE: {contract.mode.value if contract.mode else ''}",
                 "FACTORY_DEPENDENCY_STATUS: resolved",
@@ -111,6 +122,7 @@ class AutomationSkillRenderer:
                 f"RECOVERY_CONTEXT: {recovery_context}",
             )
         )
+        return "\n".join(context)
 
 
 class PiAutomationRunner:

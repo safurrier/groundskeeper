@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -79,6 +80,14 @@ def automation_task_identity(task: AutomationTask) -> str:
         f"groundskeeper:{task.source_issue.repository.casefold()}:"
         f"{task.source_issue.number}:{task.target_repository.casefold()}"
     )
+
+
+def automation_task_branch(task: AutomationTask) -> str:
+    """Return the deterministic target branch used to identify one task PR."""
+    task_key = hashlib.sha256(
+        automation_task_identity(task).encode("utf-8")
+    ).hexdigest()[:16]
+    return f"groundskeeper/task-{task_key}"
 
 
 class AdmissionState(str, Enum):

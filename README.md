@@ -9,8 +9,8 @@ runs skills on repository events.
 The first automation source is GitHub Issues and the first runner is Pi. A tick
 claims at most one trusted, explicitly-ready issue, renders its configured skill
 with a normalized task context, and runs it in Pi. Groundskeeper validates its
-fixed policy and enforces the accepted-result postcondition: only an open draft
-pull request with an exact GitHub closing reference reaches review. It does not
+fixed policy and enforces the accepted-result postcondition: only a verified
+open draft pull request reaches review. It does not
 sandbox Pi or prevent a user-authorized process from merging a pull request.
 
 ```yaml
@@ -43,17 +43,28 @@ automations:
       concurrency: 1
       output: draft-pr
       merge: never
+      link-source-issue: true
+      include-factory-session: true
+      include-pi-resume: true
 ```
 
 Create `issue-implementation` as an ordinary skill under
 `.groundskeeper/skills/`. It receives its usual prompt plus `TASK_ID`,
 `TASK_TITLE`, `TASK_BODY`, `TASK_URL`, `REPOSITORY`,
-`FACTORY_CLOSING_REFERENCE`, `RECOVERY_CONTEXT`, typed `TARGET_CHECKOUT_MODE`,
+`RECOVERY_CONTEXT`, typed `TARGET_CHECKOUT_MODE`,
 `TARGET_BASE_REF`, `TARGET_BASE_SHA`, `TARGET_REFRESH`,
 `TARGET_WORKSPACE_PATH`, and the fixed
-`POLICY_CONCURRENCY`, `POLICY_OUTPUT`, and `POLICY_MERGE` fields. `REPOSITORY`
-is the target repository. The closing reference is `#123` for a same-repository
-queue or `example/work-factory#123` for a cross-repository queue.
+`POLICY_CONCURRENCY`, `POLICY_OUTPUT`, `POLICY_MERGE`,
+`POLICY_LINK_SOURCE_ISSUE`, `POLICY_INCLUDE_FACTORY_SESSION`, and
+`POLICY_INCLUDE_PI_RESUME` fields. `REPOSITORY` is the target repository.
+When `link-source-issue` is true, the prompt also includes
+`FACTORY_CLOSING_REFERENCE`: `#123` for a same-repository queue or
+`example/work-factory#123` for a cross-repository queue. All three public
+handoff controls default to true. Disabling them tells the worker to omit that
+source or session metadata from the target pull request; Groundskeeper retains
+the recovery fields in its private execution context. Disabling source linking
+requires an `isolated-worktree` or `managed-worktree` target so Groundskeeper
+can verify the deterministic task branch.
 Normal `gk run` and `gk render` behavior for that skill is unchanged.
 
 ```bash
@@ -78,9 +89,9 @@ dirty working tree is neither inspected nor modified by Groundskeeper in
 task branch from the frozen SHA, runs Pi there, and reuses that same workspace
 and original base when recovering the deterministic session. Source issue
 discovery, admission, labels, dependencies, and comments stay in the source
-repository. Pull-request reconciliation queries the
-exact source issue's closing-PR connection and filters results to the target
-repository. `tick` is noninteractive and uses a host-local
+repository. Pull-request reconciliation uses either the exact source issue's
+closing-PR connection or the deterministic task branch, according to policy,
+and filters results to the target repository. `tick` is noninteractive and uses a host-local
 source-queue lock plus a target donor/worktree lock. Locks and deterministic
 task worktrees live under `$XDG_STATE_HOME/groundskeeper`
 (or `~/.local/state/groundskeeper`), so separate config worktrees share the
@@ -89,9 +100,8 @@ narrow host/test override. Run exactly one scheduler host for each automation;
 multi-host scheduling is not supported. A tick reconciles running work first,
 then atomically reclaims deferred work, then claims new ready work. A successful
 no-work tick is safe. Before dispatch and after any worker return, Groundskeeper
-reconciles the accepted GitHub result: an open draft PR in the target repository
-with the exact repository-qualified source issue closing reference moves to
-review even if the worker reported a late failure. If accepted and violating
+reconciles the accepted GitHub result: a policy-verified open draft PR in the
+target repository moves to review even if the worker reported a late failure. If accepted and violating
 exact target PRs coexist, the accepted draft wins; otherwise a non-draft, closed,
 or merged exact target PR blocks without dispatch. Explicit Codex usage,
 provider rate-limit/HTTP 429, and temporary provider-capacity failures move the
@@ -158,8 +168,9 @@ blocks the claimed issue with the command error and releases the host lock for r
 If a process exits after claiming an issue, the next tick resumes that session
 and reconciles GitHub state. Issue discovery requests ready, running, and
 deferred labels server-side and is bounded at 1,000 open issues per state.
-Pull request reconciliation inspects the exact source issue's repository-qualified
-closing pull request references and filters them to the configured target repository.
+Pull request reconciliation inspects either the exact source issue's
+repository-qualified closing pull request references or the deterministic task
+branch and filters them to the configured target repository.
 
 Define AI agent skills as markdown prompt templates. Chain them into workflows. Run them locally or generate GitHub Actions workflows that run them on PRs or schedules.
 

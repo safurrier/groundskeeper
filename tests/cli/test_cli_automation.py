@@ -110,6 +110,9 @@ def test_automation_list_json(tmp_path: Path) -> None:
                         "concurrency": 1,
                         "output": "draft-pr",
                         "merge": "never",
+                        "link_source_issue": True,
+                        "include_factory_session": True,
+                        "include_pi_resume": True,
                     },
                 }
             ]
@@ -229,6 +232,9 @@ def test_automation_show_and_validate_use_versioned_envelopes(
                     "concurrency": 1,
                     "output": "draft-pr",
                     "merge": "never",
+                    "link_source_issue": True,
+                    "include_factory_session": True,
+                    "include_pi_resume": True,
                 },
                 "skill": {
                     "name": "codex-code-review",

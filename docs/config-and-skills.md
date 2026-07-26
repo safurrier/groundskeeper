@@ -31,15 +31,40 @@ optional strict `target.checkout` block selects an existing checkout or an
 isolated Groundskeeper-managed task worktree. Safety
 policy is strict: concurrency is `1`, output is `draft-pr`, and merge is `never`.
 Groundskeeper validates this policy and enforces the accepted-result
-postcondition: only an open draft pull request in the target repository that
-closes the exact repository-qualified source issue reaches review. It does not
-sandbox a user-authorized Pi process. An automation skill receives normalized
+postcondition: only an open draft pull request in the target repository reaches
+review. With `policy.link-source-issue: true`, Groundskeeper identifies that PR
+through GitHub's exact source-issue closing references. With it false,
+Groundskeeper identifies the PR through the deterministic automation branch.
+It does not sandbox a user-authorized Pi process. An automation skill receives normalized
 `TASK_ID`, `TASK_TITLE`, `TASK_BODY`, `TASK_URL`, target `REPOSITORY`, typed
-`FACTORY_CLOSING_REFERENCE`, `RECOVERY_CONTEXT`, and `POLICY_CONCURRENCY`,
-`POLICY_OUTPUT`, and `POLICY_MERGE`; checkout-aware workers also receive
+`RECOVERY_CONTEXT`, `POLICY_CONCURRENCY`, `POLICY_OUTPUT`, `POLICY_MERGE`,
+`POLICY_LINK_SOURCE_ISSUE`, `POLICY_INCLUDE_FACTORY_SESSION`, and
+`POLICY_INCLUDE_PI_RESUME`. When source linking is enabled it also receives
+`FACTORY_CLOSING_REFERENCE`; checkout-aware workers also receive
 `TARGET_CHECKOUT_MODE`, `TARGET_BASE_REF`, `TARGET_BASE_SHA`, and
 `TARGET_REFRESH`, plus the selected `TARGET_WORKSPACE_PATH`. Ordinary skill
 rendering is unchanged.
+
+Public target-PR disclosure is explicit policy:
+
+```yaml
+policy:
+  concurrency: 1
+  output: draft-pr
+  merge: never
+  link-source-issue: true
+  include-factory-session: true
+  include-pi-resume: true
+```
+
+The three disclosure fields are strict booleans and default to `true`.
+`link-source-issue: false` tells the worker not to link or mention the source
+queue issue in the target PR and changes reconciliation to the deterministic
+task branch, so it requires `target.checkout.mode: isolated-worktree` or
+`managed-worktree`. The other fields tell the worker whether factory-session identity
+and the Pi resume reference may appear in the target PR. Groundskeeper still
+provides those values in execution context for recovery and may record them on
+the source-side factory issue.
 
 Every GitHub Issues automation task must begin with exactly these first two H2
 sections. The contract sections cannot contain comments or fenced examples:

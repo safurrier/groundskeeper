@@ -193,6 +193,9 @@ def _automation_summary(
             "concurrency": item.policy.concurrency,
             "output": item.policy.output,
             "merge": item.policy.merge,
+            "link_source_issue": item.policy.link_source_issue,
+            "include_factory_session": item.policy.include_factory_session,
+            "include_pi_resume": item.policy.include_pi_resume,
         },
     }
     if skill is not None:
@@ -498,6 +501,7 @@ def automation_inspect(ctx: click.Context, name: str, json_output: bool) -> None
             GhClient(process, definition.target.repository_path),
             definition.source,
             definition.target.repository,
+            definition.policy,
         )
         tasks = [
             *tracker.list_running(),
@@ -604,6 +608,7 @@ def _execute_automation_tick(
             GhClient(process, definition.target.repository_path),
             definition.source,
             definition.target.repository,
+            definition.policy,
         )
         service = AutomationService(tracker, runner)
         return definition, service.tick(definition, dry_run=True)
@@ -627,6 +632,7 @@ def _execute_automation_tick(
             GhClient(process, definition.target.repository_path),
             definition.source,
             definition.target.repository,
+            definition.policy,
         )
         service = AutomationService(tracker, runner)
         return definition, service.tick(definition, dry_run=False)
