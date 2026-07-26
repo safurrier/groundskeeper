@@ -713,31 +713,33 @@ adapters provide typed semantic operations and bounded timeouts above it.</p>
 <p>For workflows: steps execute sequentially. <code>ParallelGroup</code> steps use <code>ThreadPoolExecutor</code> when all skills are read-only (no Write/Edit/Bash/NotebookEdit tools) or when <code>--parallel</code> is forced.</p>
 <h3 id="local-tracker-automations">Local tracker automations<a class="headerlink" href="#local-tracker-automations" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>automation config
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>  → strict source queue, target repository/path, runner, labels, timeout, and policy parsing
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>  → strict source queue, target repository/path/checkout, runner, labels, timeout, and policy parsing
 <a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>  → resolve configured skill with provenance
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>  → prove target path is a Git worktree whose origin matches target repository
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>  → acquire stable host-state lock for canonical source repository identity
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>  → reconcile running issues before deferred work before ready work
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>  → parse one exact Factory Task + Dependencies contract and resolve dependency state
-<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>  → block malformed, tracking, inaccessible, unresolved, or closed-unmerged dependency work before Pi
-<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>  → atomically claim at most one admitted trusted deferred or ready task
-<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>  → normalize the repository-qualified source issue and explicit target identity
-<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>  → render configured skill + typed closing/task-contract/recovery/policy/session context
-<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>  → require POSIX process-group isolation
-<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>  → run Pi in the target checkout with a deterministic session keyed by source + issue + target
-<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>      stdout + stderr → separately preserved and tee&#39;d to live scheduler logs
-<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>      stdout → PR URL parsing + strict public blocker marker extraction
-<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a>      stderr → transient/durable provider failure classification
-<a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a>  → reconcile GitHub as the durable result authority
-<a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a>      exact source issue&#39;s closedByPullRequestsReferences filtered to target repository
-<a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a>      accepted open target draft PR → review (wins if a violating PR also exists)
-<a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a>      otherwise non-draft, closed, or merged target closing PR → blocked policy violation
-<a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a>      explicit closing-PR page exhaustion → indeterminate error without lifecycle mutation
-<a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a>      no accepted PR + explicit transient provider exhaustion → deferred
-<a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a>      no accepted PR + durable/ordinary worker failure → blocked worker error
-<a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a>      valid public blocker marker → bounded summary + next action in issue comment
-<a id="__codelineno-1-25" name="__codelineno-1-25" href="#__codelineno-1-25"></a>      arbitrary worker stdout → local logs only
-<a id="__codelineno-1-26" name="__codelineno-1-26" href="#__codelineno-1-26"></a>  → expose session id, stable name, and resume command in JSON + issue comment
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>  → validation/dry-run: prove target identity and resolve the optional base without donor mutation
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>  → live tick: acquire stable source-admission and target-workspace host locks
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>  → live tick: prove target identity, optionally fetch the exact origin branch, and freeze its commit SHA
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>  → reconcile running issues before deferred work before ready work
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>  → parse one exact Factory Task + Dependencies contract and resolve dependency state
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>  → block malformed, tracking, inaccessible, unresolved, or closed-unmerged dependency work before Pi
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>  → atomically claim at most one admitted trusted deferred or ready task
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>  → create or reuse the deterministic task branch/worktree from its pinned original base
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>  → normalize the repository-qualified source issue and explicit target identity
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>  → render configured skill + typed closing/task-contract/checkout/recovery/policy/session context
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>  → require POSIX process-group isolation
+<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>  → run Pi in the task worktree with a deterministic session keyed by source + issue + target
+<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a>      stdout + stderr → separately preserved and tee&#39;d to live scheduler logs
+<a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a>      stdout → PR URL parsing + strict public blocker marker extraction
+<a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a>      stderr → transient/durable provider failure classification
+<a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a>  → reconcile GitHub as the durable result authority
+<a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a>      exact source issue&#39;s closedByPullRequestsReferences filtered to target repository
+<a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a>      accepted open target draft PR → review (wins if a violating PR also exists)
+<a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a>      otherwise non-draft, closed, or merged target closing PR → blocked policy violation
+<a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a>      explicit closing-PR page exhaustion → indeterminate error without lifecycle mutation
+<a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a>      no accepted PR + explicit transient provider exhaustion → deferred
+<a id="__codelineno-1-25" name="__codelineno-1-25" href="#__codelineno-1-25"></a>      no accepted PR + durable/ordinary worker failure → blocked worker error
+<a id="__codelineno-1-26" name="__codelineno-1-26" href="#__codelineno-1-26"></a>      valid public blocker marker → bounded summary + next action in issue comment
+<a id="__codelineno-1-27" name="__codelineno-1-27" href="#__codelineno-1-27"></a>      arbitrary worker stdout → local logs only
+<a id="__codelineno-1-28" name="__codelineno-1-28" href="#__codelineno-1-28"></a>  → expose session id, stable name, and resume command in JSON + issue comment
 </code></pre></div>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>ready ──claim──&gt; running ──accepted draft PR──&gt; review
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>                   │
@@ -750,11 +752,14 @@ adapters provide typed semantic operations and bounded timeouts above it.</p>
 session. A repeat transient failure returns it to <code>deferred</code>; a later accepted
 draft PR reaches <code>review</code>.</p>
 <p>The source repository owns discovery, admission, dependencies, labels, comments,
-and lifecycle. The target repository/path owns Pi cwd, rendered <code>REPOSITORY</code>,
-and accepted draft PR discovery. The workflow instructions belong to the
-configured skill; the Pi adapter knows only how to execute a rendered prompt. <code>merge: never</code> is an accepted-result
-contract, not a credential sandbox. Host-state locking coordinates config
-worktrees on one machine and does not provide distributed locking.</p>
+and lifecycle. The target checkout module owns donor validation and refresh,
+immutable task-base pinning, deterministic branch/worktree recovery, and Pi cwd.
+The target repository also scopes rendered <code>REPOSITORY</code> and accepted draft PR
+discovery. Workflow instructions belong to the configured skill; they do not
+own Git checkout mechanics. The Pi adapter knows only how to execute a rendered
+prompt. <code>merge: never</code> is an accepted-result contract, not a credential sandbox.
+Host-state locking coordinates source admission and target workspaces on one
+machine and does not provide distributed locking.</p>
 <h2 id="ci-generation-flow">CI Generation Flow<a class="headerlink" href="#ci-generation-flow" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>config.yml → load_config() → get_workflows()
 <a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>  → _parse_triggers() converts raw YAML into typed TriggerSpec tuple

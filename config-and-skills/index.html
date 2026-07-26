@@ -684,7 +684,9 @@ A Pi runner must explicitly name <code>skill</code>, use <code>approval: allow</
 identities. The source requires <code>repository</code> and at least one <code>trusted-author</code>;
 the target requires <code>repository</code> and an absolute <code>repository-path</code>. Validation,
 dry-run, and live tick prove that path is a Git worktree whose <code>origin</code> GitHub
-HTTPS or SSH remote matches the configured target before tracker access. Safety
+HTTPS or SSH remote matches the configured target before tracker access. An
+optional strict <code>target.checkout</code> block selects an existing checkout or an
+isolated Groundskeeper-managed task worktree. Safety
 policy is strict: concurrency is <code>1</code>, output is <code>draft-pr</code>, and merge is <code>never</code>.
 Groundskeeper validates this policy and enforces the accepted-result
 postcondition: only an open draft pull request in the target repository that
@@ -692,7 +694,10 @@ closes the exact repository-qualified source issue reaches review. It does not
 sandbox a user-authorized Pi process. An automation skill receives normalized
 <code>TASK_ID</code>, <code>TASK_TITLE</code>, <code>TASK_BODY</code>, <code>TASK_URL</code>, target <code>REPOSITORY</code>, typed
 <code>FACTORY_CLOSING_REFERENCE</code>, <code>RECOVERY_CONTEXT</code>, and <code>POLICY_CONCURRENCY</code>,
-<code>POLICY_OUTPUT</code>, and <code>POLICY_MERGE</code>; ordinary skill rendering is unchanged.</p>
+<code>POLICY_OUTPUT</code>, and <code>POLICY_MERGE</code>; checkout-aware workers also receive
+<code>TARGET_CHECKOUT_MODE</code>, <code>TARGET_BASE_REF</code>, <code>TARGET_BASE_SHA</code>, and
+<code>TARGET_REFRESH</code>, plus the selected <code>TARGET_WORKSPACE_PATH</code>. Ordinary skill
+rendering is unchanged.</p>
 <p>Every GitHub Issues automation task must begin with exactly these first two H2
 sections. The contract sections cannot contain comments or fenced examples:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="gu">## Factory Task</span>
@@ -730,7 +735,31 @@ below; every override must be a non-empty string and all five must be distinct:<
 <a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="nt">target</span><span class="p">:</span>
 <a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">  </span><span class="nt">repository</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">example/widgets</span>
 <a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="w">  </span><span class="nt">repository-path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/srv/widgets</span>
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="w">  </span><span class="nt">checkout</span><span class="p">:</span>
+<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="w">    </span><span class="nt">mode</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">isolated-worktree</span>
+<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="w">    </span><span class="nt">base-ref</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">origin/main</span>
+<a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a><span class="w">    </span><span class="nt">refresh</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">fetch</span>
 </code></pre></div>
+<p>When <code>checkout</code> is omitted, <code>mode: existing</code> preserves the original behavior
+and Pi runs in <code>repository-path</code>. <code>mode: isolated-worktree</code> requires an explicit
+<code>base-ref</code>. <code>refresh: none</code> resolves the locally available ref without network
+mutation. <code>refresh: fetch</code> requires an <code>origin/*</code> base and, for a live tick only,
+fetches that exact branch under the repository lock before tracker access.
+After claim, Groundskeeper atomically pins that resolved commit for the task,
+creates a deterministic branch and worktree under its host state directory, and
+runs Pi there. Deferred/running recovery reuses the same worktree and original
+base even if the configured ref has advanced. The configured skill owns workflow
+instructions, not Git checkout lifecycle. Groundskeeper never checks, cleans,
+stashes, resets, checks out, or edits the donor working tree. Fetch failure or
+an unresolved base stops before issue claim; worktree invariant failures stop
+before worker launch and leave claimed work recoverable on the next tick.</p>
+<p>Task worktrees, their local branches, and pinned base refs are retained after a
+terminal transition so draft-PR review and deterministic recovery never lose
+local state. Groundskeeper currently performs no automatic garbage collection.
+Operators may remove a task worktree with normal <code>git worktree remove</code> and then
+delete its <code>groundskeeper/task-*</code> branch and <code>refs/groundskeeper/bases/*</code> ref
+only after the task and pull request no longer need recovery. Automated,
+lock-protected retention policy remains future work.</p>
 <p>Pi runners accept optional positive <code>timeout-seconds</code> (default: <code>7200</code>) for
 long-running development work. GitHub CLI operations use a fixed 30-second
 timeout. Before dispatch and after any worker return, Groundskeeper reconciles the exact

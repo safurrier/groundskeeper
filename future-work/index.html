@@ -523,6 +523,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#automation-task-worktree-retention" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Automation task-worktree retention
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#worktree-isolated-parallel-execution-parallel-isolate" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -562,6 +573,12 @@
 
 
 <h1 id="future-work">Future Work<a class="headerlink" href="#future-work" title="Permanent link">&para;</a></h1>
+<h2 id="automation-task-worktree-retention">Automation task-worktree retention<a class="headerlink" href="#automation-task-worktree-retention" title="Permanent link">&para;</a></h2>
+<p><code>target.checkout.mode: isolated-worktree</code> deliberately retains one deterministic
+worktree, local branch, and pinned base ref per task for review and recovery.
+Add a lock-protected inspection and garbage-collection command that removes only
+workspaces whose tracker task and pull request are durably terminal. It must
+preserve active, deferred, running, and reviewable work by default.</p>
 <h2 id="worktree-isolated-parallel-execution-parallel-isolate">Worktree-isolated parallel execution (<code>--parallel --isolate</code>)<a class="headerlink" href="#worktree-isolated-parallel-execution-parallel-isolate" title="Permanent link">&para;</a></h2>
 <p>Currently, parallel stages run skills in the same working directory via ThreadPoolExecutor. This is safe for read-only skills but risky for writers. Full isolation would give each skill in a parallel group its own git worktree:</p>
 <ul>
