@@ -12,6 +12,10 @@ class TickAlreadyRunningError(RuntimeError):
     """Another process on this host owns the automation tick."""
 
 
+class TickLockError(RuntimeError):
+    """The host-local lock path cannot be opened safely."""
+
+
 class TickLock:
     """Advisory lock released automatically on process exit."""
 
@@ -20,8 +24,14 @@ class TickLock:
         self._handle: TextIO | None = None
 
     def __enter__(self) -> TickLock:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._handle = self._path.open("a+", encoding="utf-8")
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            self._handle = self._path.open("a+", encoding="utf-8")
+        except OSError as error:
+            self._handle = None
+            raise TickLockError(
+                f"could not open host-local tick lock {self._path}: {error}"
+            ) from error
         try:
             fcntl.flock(self._handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as error:

@@ -96,8 +96,31 @@ issue to `factory:deferred` with an actionable comment and are resumed on the
 next tick. Authentication, model configuration, policy, timeout, and ordinary
 worker failures move it to `factory:blocked`. The breaking source/target JSON
 shape uses envelope version `2`, and dry-run output deliberately omits
-issue bodies. Set a scheduler's working directory to the repository containing
-`.groundskeeper/config.yml`, or pass `gk automation --config PATH ...`.
+issue bodies.
+
+For unattended execution, point launchd, systemd, or cron at the installed
+Groundskeeper command rather than a script inside the configuration checkout:
+
+```bash
+gk automation \
+  --config .groundskeeper/config.yml \
+  run-scheduled \
+  --schedule-id personal-factory \
+  --source-repository-path /Users/you/src/factory-config \
+  --source-ref origin/main \
+  --source-refresh fetch \
+  --daily-attempt-limit 5 \
+  --rotation daily \
+  --json
+```
+
+`run-scheduled` fetches and pins the configured ref, then loads configuration
+and local skills from a clean detached worktree under Groundskeeper's host
+state. The donor checkout may be dirty or on another branch and is never
+cleaned, reset, stashed, or used as the execution directory. Groundskeeper owns
+the bounded source worktree, crash-safe daily reservations, ordering, and tick
+lifecycle; the host adapter owns only calendar timing, secret injection, and
+runtime-specific launchers.
 
 The lifecycle is deliberately small and label-backed:
 

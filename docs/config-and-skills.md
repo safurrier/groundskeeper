@@ -112,6 +112,36 @@ delete its `groundskeeper/task-*` branch and `refs/groundskeeper/bases/*` ref
 only after the task and pull request no longer need recovery. Automated,
 lock-protected retention policy remains future work.
 
+### Host scheduler execution source
+
+Use `gk automation ... run-scheduled` behind a host scheduler when automation
+configuration and local skills are versioned in Git. The command takes an
+explicit donor repository, ref, refresh policy, schedule identity, and daily
+attempt limit. The config path remains the normal `automation --config` option,
+but must be repository-relative:
+
+```bash
+gk automation \
+  --config .groundskeeper/config.work.yml \
+  run-scheduled discord-dev \
+  --schedule-id work-factory \
+  --source-repository-path /Users/you/src/dots \
+  --source-ref origin/main \
+  --source-refresh fetch \
+  --daily-attempt-limit 1 \
+  --rotation fixed \
+  --json
+```
+
+Groundskeeper executes the config and local skills from a managed detached
+snapshot of the resolved commit. It does not execute repository scripts or read
+working-tree configuration from the donor. A dirty donor therefore does not
+block a scheduled run or override reviewed configuration. Paths that are
+absolute or escape the snapshot are rejected, as are external `--skill-path`
+directories and local-skill symlinks that resolve outside the snapshot. The
+operating-system schedule, secret injection, and runtime-specific Pi wrapper
+remain host policy and are not part of the automation YAML schema.
+
 Pi runners accept optional positive `timeout-seconds` (default: `7200`) for
 long-running development work. GitHub CLI operations use a fixed 30-second
 timeout. Before dispatch and after any worker return, Groundskeeper reconciles the exact

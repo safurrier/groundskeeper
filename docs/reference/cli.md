@@ -27,6 +27,14 @@ gk automation show NAME [--json]
 gk automation validate [NAME] [--json]
 gk automation inspect NAME [--json]
 gk automation tick NAME [--dry-run] [--json]
+gk automation --config RELATIVE_PATH run-scheduled [NAME ...] \
+  --schedule-id ID \
+  --source-repository-path PATH \
+  --daily-attempt-limit N \
+  [--source-ref origin/main] \
+  [--source-refresh fetch|none] \
+  [--rotation daily|fixed] \
+  [--json]
 ```
 
 `list` and `show` inspect configured local automations. `inspect` reads tracker
@@ -63,6 +71,31 @@ profiles can substitute their profile wrapper, such as `pih`. Pi automation
 requires POSIX process-group isolation; validation and live ticks reject
 unsupported hosts before tracker access, issue claim, or worker startup rather
 than risk descendants surviving after lock release.
+
+`run-scheduled` is the stable installed-CLI entry point for launchd, systemd,
+cron, or another host scheduler. Its `--config` path must be relative to the
+execution-source repository. Groundskeeper locks the source, optionally fetches
+the exact configured `origin/*` branch, resolves one commit, and materializes a
+clean detached snapshot under its host state directory. Configuration and local
+skills are loaded only from that pinned snapshot. The donor checkout
+may be on another branch or contain tracked and untracked changes; scheduled
+execution never checks, stashes, resets, checks out, cleans, or executes files
+from that working tree. External `--skill-path` directories and snapshot
+symlinks that resolve outside the snapshot are rejected.
+
+When no names are supplied, `run-scheduled` uses all automations in declaration
+order. `daily` rotation changes the first automation by local calendar day;
+`fixed` preserves declaration order. Groundskeeper reserves quota before every
+mutating tick and refunds only a proven `no-work` or `not-claimed` result, so a
+crash cannot fail open. The schedule ID owns a non-overlap lock and strict daily
+ledger under the Groundskeeper state root. Preflight validates the pinned
+config, skills, Pi, and target checkouts before opening that ledger. The JSON
+result includes the execution ref, pinned commit, managed workspace, quota
+state, and each tick result.
+
+The host adapter remains outside Groundskeeper: it chooses when to invoke the
+command and supplies secrets or a private Pi launcher. It should execute the
+installed `gk`, not a script from the donor repository.
 
 Pi runner configuration accepts optional `timeout-seconds` (default: 7,200) for
 long-running tasks. GitHub CLI calls use a fixed 30-second timeout. Groundskeeper

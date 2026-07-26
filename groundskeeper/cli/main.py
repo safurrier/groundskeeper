@@ -5,8 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 from contextlib import ExitStack
+from datetime import date
 from pathlib import Path
 
 import click
@@ -33,6 +35,7 @@ from groundskeeper.adapters.target_checkout import (
 )
 from groundskeeper.adapters.tick_lock import TickLock
 from groundskeeper.automation import AutomationService
+from groundskeeper.domain.automation import TickResult
 from groundskeeper.domain.config import (
     Automation,
     ParallelGroup,
@@ -51,6 +54,11 @@ from groundskeeper.domain.errors import (
 from groundskeeper.domain.models import RunContext, RunResult, Skill
 from groundskeeper.domain.parser import parse_skill_file
 from groundskeeper.protocols import SkillStore
+from groundskeeper.scheduler import (
+    ScheduledAutomationService,
+    ScheduledRunRequest,
+    ScheduledTick,
+)
 
 
 def _get_stores(
@@ -101,6 +109,7 @@ def cli(ctx: click.Context, skill_path: tuple[str, ...]) -> None:
 
 
 JSON_VERSION = 2
+_SCHEDULE_ID_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
 
 
 class AutomationCommandError(click.ClickException):
@@ -541,6 +550,118 @@ def automation_inspect(ctx: click.Context, name: str, json_output: bool) -> None
     click.echo(json.dumps(data, indent=2))
 
 
+def _automation_task_data(result: TickResult) -> dict[str, object] | None:
+    """Return the public task identity for one tick result."""
+    if result.task is None:
+        return None
+    return {
+        "id": str(result.task.source_issue.number),
+        "title": result.task.title,
+        "url": result.task.url,
+        "source": {
+            "repository": result.task.source_issue.repository,
+            "issue": result.task.source_issue.number,
+        },
+        "target": {"repository": result.task.target_repository},
+        "state": result.task.state.value,
+    }
+
+
+def _automation_tick_exit_code(status: str) -> int:
+    """Map the stable tick status contract to its process exit code."""
+    return {
+        "no-work": 0,
+        "review": 0,
+        "deferred": 0,
+        "would-dispatch": 0,
+        "would-resume": 0,
+        "would-block": 0,
+        "not-claimed": 4,
+        "blocked": 5,
+    }.get(status, 2)
+
+
+def _execute_automation_tick(
+    config_path: Path,
+    name: str,
+    extra_skill_paths: tuple[str, ...],
+    *,
+    dry_run: bool = False,
+) -> tuple[Automation, TickResult]:
+    """Execute one tick through the same lifecycle used by the CLI command."""
+    definition = _load_automation(config_path, name)
+    process = ProcessClient()
+    if dry_run:
+        runner = _build_automation_runner(
+            definition,
+            config_path,
+            extra_skill_paths,
+            process,
+            require_available=False,
+        )
+        tracker = GitHubIssuesTracker(
+            GhClient(process, definition.target.repository_path),
+            definition.source,
+            definition.target.repository,
+        )
+        service = AutomationService(tracker, runner)
+        return definition, service.tick(definition, dry_run=True)
+
+    target_common_dir = target_checkout_common_dir(
+        process, definition.target.repository_path
+    )
+    with ExitStack() as locks:
+        locks.enter_context(TickLock(_automation_lock_path(definition)))
+        locks.enter_context(
+            TickLock(_automation_target_lock_path(definition, target_common_dir))
+        )
+        runner = _build_automation_runner(
+            definition,
+            config_path,
+            extra_skill_paths,
+            process,
+            refresh_target=True,
+        )
+        tracker = GitHubIssuesTracker(
+            GhClient(process, definition.target.repository_path),
+            definition.source,
+            definition.target.repository,
+        )
+        service = AutomationService(tracker, runner)
+        return definition, service.tick(definition, dry_run=False)
+
+
+def _preflight_scheduled_automations(
+    config_path: Path,
+    requested_names: tuple[str, ...],
+    extra_skill_paths: tuple[str, ...],
+) -> list[str]:
+    """Validate every scheduled automation before opening daily quota state."""
+    definitions = get_automations(load_config(config_path))
+    available = {definition.name: definition for definition in definitions}
+    names = list(requested_names) if requested_names else list(available)
+    if not names:
+        raise ConfigError("No automations configured for the scheduled run.")
+    if len(set(names)) != len(names):
+        raise ConfigError("Scheduled automation names must be unique.")
+    process = ProcessClient()
+    for name in names:
+        definition = available.get(name)
+        if definition is None:
+            raise ConfigError(
+                f"Automation not found: {name}. Run 'gk automation list'."
+            )
+        skill = _resolve_automation_skill(definition, config_path, extra_skill_paths)
+        _build_automation_runner(
+            definition,
+            config_path,
+            extra_skill_paths,
+            process,
+            skill=skill,
+        )
+    return names
+
+
 @automation.command(
     "tick",
     epilog="""
@@ -569,82 +690,25 @@ def automation_tick(
     config_path = _automation_config_path(ctx)
     extra = ctx.obj.get("extra_skill_paths", ()) if ctx.obj else ()
     try:
-        definition = _load_automation(config_path, name)
-        process = ProcessClient()
-        if dry_run:
-            runner = _build_automation_runner(
-                definition, config_path, extra, process, require_available=False
-            )
-            tracker = GitHubIssuesTracker(
-                GhClient(process, definition.target.repository_path),
-                definition.source,
-                definition.target.repository,
-            )
-            service = AutomationService(tracker, runner)
-            result = service.tick(definition, dry_run=True)
-        else:
-            target_common_dir = target_checkout_common_dir(
-                process, definition.target.repository_path
-            )
-            with ExitStack() as locks:
-                locks.enter_context(TickLock(_automation_lock_path(definition)))
-                locks.enter_context(
-                    TickLock(
-                        _automation_target_lock_path(definition, target_common_dir)
-                    )
-                )
-                runner = _build_automation_runner(
-                    definition,
-                    config_path,
-                    extra,
-                    process,
-                    refresh_target=True,
-                )
-                tracker = GitHubIssuesTracker(
-                    GhClient(process, definition.target.repository_path),
-                    definition.source,
-                    definition.target.repository,
-                )
-                service = AutomationService(tracker, runner)
-                result = service.tick(definition, dry_run=False)
+        definition, result = _execute_automation_tick(
+            config_path, name, extra, dry_run=dry_run
+        )
     except (ConfigError, RuntimeError) as error:
         _automation_error(str(error), json_output)
         return
 
-    task_data = None
-    if result.task is not None:
-        task_data = {
-            "id": str(result.task.source_issue.number),
-            "title": result.task.title,
-            "url": result.task.url,
-            "source": {
-                "repository": result.task.source_issue.repository,
-                "issue": result.task.source_issue.number,
-            },
-            "target": {"repository": result.task.target_repository},
-            "state": result.task.state.value,
-        }
     data: dict[str, object] = {
         "automation": result.automation,
         "source": {"repository": definition.source.repository},
         "target": _automation_target_summary(definition),
-        "task": task_data,
+        "task": _automation_task_data(result),
         "pull_request_url": result.pull_request_url,
         "detail": result.detail,
         "session_id": result.session_id,
         "session_name": result.session_name,
         "resume_command": result.resume_command,
     }
-    exit_code = {
-        "no-work": 0,
-        "review": 0,
-        "deferred": 0,
-        "would-dispatch": 0,
-        "would-resume": 0,
-        "would-block": 0,
-        "not-claimed": 4,
-        "blocked": 5,
-    }.get(result.status, 2)
+    exit_code = _automation_tick_exit_code(result.status)
     if json_output:
         click.echo(_automation_envelope(result.status, data, exit_code))
     else:
@@ -653,6 +717,173 @@ def automation_tick(
         )
     if exit_code:
         raise SystemExit(exit_code)
+
+
+@automation.command(
+    "run-scheduled",
+    epilog="""
+\b
+Examples:
+  gk automation --config .groundskeeper/config.yml run-scheduled \
+    --schedule-id personal --source-repository-path ~/dots --daily-attempt-limit 5
+  gk automation --config .groundskeeper/config.work.yml run-scheduled discord-dev \
+    --schedule-id work --source-repository-path ~/dots --daily-attempt-limit 1
+
+Exit codes: 0 completed/no work, 2 preflight, state, or automation failure.
+""",
+)
+@click.argument("names", nargs=-1)
+@click.option(
+    "--schedule-id",
+    required=True,
+    help="Stable kebab-case identity for locks and daily quota state.",
+)
+@click.option(
+    "--source-repository-path",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    required=True,
+    help="Git donor used only to resolve and materialize the execution snapshot.",
+)
+@click.option(
+    "--source-ref",
+    default="origin/main",
+    show_default=True,
+    help="Commit-ish containing the scheduled config and local skills.",
+)
+@click.option(
+    "--source-refresh",
+    type=click.Choice(["none", "fetch"]),
+    default="fetch",
+    show_default=True,
+    help="Refresh origin/* before pinning the execution snapshot.",
+)
+@click.option(
+    "--daily-attempt-limit",
+    type=click.IntRange(min=1),
+    required=True,
+    help="Maximum worker attempts shared by this schedule each local day.",
+)
+@click.option(
+    "--rotation",
+    type=click.Choice(["daily", "fixed"]),
+    default="daily",
+    show_default=True,
+    help="Rotate the first automation daily or preserve declaration order.",
+)
+@click.option("--json", "json_output", is_flag=True, help="Emit versioned JSON output.")
+@click.pass_context
+def automation_run_scheduled(
+    ctx: click.Context,
+    names: tuple[str, ...],
+    schedule_id: str,
+    source_repository_path: Path,
+    source_ref: str,
+    source_refresh: str,
+    daily_attempt_limit: int,
+    rotation: str,
+    json_output: bool,
+) -> None:
+    """Run automations from an immutable managed configuration snapshot.
+
+    Use this as the stable command behind launchd, systemd, cron, or another
+    host scheduler. The donor checkout may be dirty: Groundskeeper fetches and
+    pins SOURCE_REF, executes config and local skills from a detached managed
+    worktree, and never checks out, resets, stashes, or cleans the donor.
+    """
+    if not _SCHEDULE_ID_RE.fullmatch(schedule_id):
+        _automation_error("Schedule id must be kebab-case.", json_output)
+        return
+    configured_path = _automation_config_path(ctx)
+    extra = ctx.obj.get("extra_skill_paths", ()) if ctx.obj else ()
+    if extra:
+        _automation_error(
+            "run-scheduled does not accept --skill-path; scheduled skills must "
+            "come from the pinned execution snapshot or builtins.",
+            json_output,
+        )
+        return
+    today = date.today()
+    request = ScheduledRunRequest(
+        schedule_id=schedule_id,
+        source_repository_path=source_repository_path,
+        source_ref=source_ref,
+        source_refresh=source_refresh,
+        config_path=configured_path,
+        names=names,
+        daily_attempt_limit=daily_attempt_limit,
+        rotation=today.toordinal() if rotation == "daily" else 0,
+        day=today,
+    )
+    service = ScheduledAutomationService(_automation_state_root(), ProcessClient())
+
+    def preflight(config_path: Path, selected: tuple[str, ...]) -> list[str]:
+        return _preflight_scheduled_automations(config_path, selected, ())
+
+    def tick(config_path: Path, name: str) -> ScheduledTick:
+        try:
+            _definition, result = _execute_automation_tick(config_path, name, ())
+        except (ConfigError, RuntimeError) as error:
+            return ScheduledTick(name, "error", 2, None, str(error))
+        return ScheduledTick(
+            name,
+            result.status,
+            _automation_tick_exit_code(result.status),
+            _automation_task_data(result),
+            result.detail or None,
+            result.pull_request_url,
+        )
+
+    try:
+        scheduled = service.run(request, preflight=preflight, tick=tick)
+    except (ConfigError, RuntimeError, ValueError) as error:
+        _automation_error(str(error), json_output)
+        return
+
+    runs = scheduled.runs
+    consumed = scheduled.consumed_today
+    source = scheduled.execution_source
+    run_data = [
+        {
+            "automation": run.automation,
+            "status": run.status,
+            "exit_code": run.exit_code,
+            "consumed_attempt": run.consumed_attempt,
+            "task": run.task,
+            "pull_request_url": run.pull_request_url,
+            "detail": run.detail,
+        }
+        for run in runs
+    ]
+    failed = any(run.exit_code != 0 for run in runs)
+    data: dict[str, object] = {
+        "schedule": schedule_id,
+        "execution_source": {
+            "repository_path": str(source_repository_path.resolve()),
+            "ref": source_ref,
+            "commit": source.commit,
+            "workspace": str(source.path),
+        },
+        "date": today.isoformat(),
+        "limit": daily_attempt_limit,
+        "consumed_today": consumed,
+        "remaining_today": max(0, daily_attempt_limit - consumed),
+        "runs": run_data,
+    }
+    if json_output:
+        click.echo(
+            _automation_envelope(
+                "error" if failed else "ok",
+                data,
+                exit_code=2 if failed else 0,
+            )
+        )
+    else:
+        click.echo(
+            f"{'error' if failed else 'ok'}: {len(runs)} tick(s), "
+            f"{consumed}/{daily_attempt_limit} attempts consumed"
+        )
+    if failed:
+        raise SystemExit(2)
 
 
 @cli.command(

@@ -131,6 +131,34 @@ prompt. `merge: never` is an accepted-result contract, not a credential sandbox.
 Host-state locking coordinates source admission and target workspaces on one
 machine and does not provide distributed locking.
 
+### Scheduled local automation
+
+```text
+host adapter (launchd, systemd, cron)
+  → installed `gk automation ... run-scheduled`
+  → acquire the named schedule lock
+  → acquire the execution-source repository lock
+  → optionally fetch the configured origin branch without touching donor files
+  → resolve and pin one commit
+  → create, advance, or validate one clean detached pinned worktree
+  → resolve the repository-relative config and local skills inside that snapshot
+  → validate every selected automation before quota state is opened
+  → rotate selected automations and run bounded ticks under one daily ledger
+  → emit one versioned JSON schedule result
+```
+
+The execution-source adapter owns Git refresh, commit resolution, and the
+bounded reusable configuration worktree. The scheduler application module owns
+lock ordering, repository-wide source-lease duration, preflight ordering, result
+aggregation, and daily reservation policy; its file-backed ledger adapter owns
+strict, locked persistence. Schedules using different refs from the same Git
+common directory serialize because fetch and worktree administration mutate
+shared repository state. The existing automation lifecycle continues to own
+tracker reconciliation and target task worktrees. A host adapter owns only
+calendar timing, environment/secrets, and runtime-specific executable wiring.
+The developer checkout is a donor for Git object access, not an execution
+directory or cleanliness authority.
+
 ## CI Generation Flow
 
 ```
