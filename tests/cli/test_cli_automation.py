@@ -118,6 +118,32 @@ def test_automation_list_json(tmp_path: Path) -> None:
     }
 
 
+def test_scheduled_run_rejects_external_skill_paths(tmp_path: Path) -> None:
+    external = tmp_path / "external-skills"
+    external.mkdir()
+    result = CliRunner().invoke(
+        cli,
+        [
+            "--skill-path",
+            str(external),
+            "automation",
+            "run-scheduled",
+            "--schedule-id",
+            "test-factory",
+            "--source-repository-path",
+            str(tmp_path),
+            "--daily-attempt-limit",
+            "1",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 2
+    payload = json.loads(result.output)
+    assert payload["status"] == "error"
+    assert payload["exit_code"] == 2
+
+
 def test_repository_locks_are_host_scoped_and_identity_stable(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

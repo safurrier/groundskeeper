@@ -542,6 +542,130 @@ class TestAutomationE2E:
         assert (repo / "tracked.txt").read_text() == "donor base\n"
         assert (repo / "unrelated.txt").read_text() == "preserve me\n"
 
+    def test_scheduled_run_uses_origin_snapshot_and_preserves_dirty_source(
+        self, tmp_path: Path
+    ) -> None:
+        repo, env = _factory_flow_repo(tmp_path, "ready")
+        state_home = tmp_path / "state"
+        env["GROUNDSKEEPER_STATE_HOME"] = str(state_home)
+        real_git = shutil.which("git")
+        assert real_git is not None
+        remote = tmp_path / "source.git"
+        subprocess.run([real_git, "init", "--bare", "-q", remote], check=True)
+        subprocess.run([real_git, "switch", "-c", "main"], cwd=repo, check=True)
+        subprocess.run([real_git, "add", "."], cwd=repo, check=True)
+        subprocess.run(
+            [
+                real_git,
+                "-c",
+                "user.name=Groundskeeper Test",
+                "-c",
+                "user.email=groundskeeper@example.com",
+                "commit",
+                "-qm",
+                "scheduled source",
+            ],
+            cwd=repo,
+            check=True,
+        )
+        source_commit = subprocess.run(
+            [real_git, "rev-parse", "HEAD"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        subprocess.run(
+            [real_git, "remote", "set-url", "origin", remote], cwd=repo, check=True
+        )
+        subprocess.run(
+            [real_git, "push", "-q", "-u", "origin", "main"], cwd=repo, check=True
+        )
+        config_path = repo / ".groundskeeper/config.yml"
+        config_path.write_text("dirty: [invalid\n")
+        (repo / "local-notes.txt").write_text("preserve me\n")
+
+        binary_dir = tmp_path / "bin"
+        git_wrapper = binary_dir / "git"
+        git_wrapper.write_text(
+            "#!/bin/sh\n"
+            'if [ "$*" = "remote get-url origin" ]; then\n'
+            "  printf '%s\\n' 'git@github.com:target/repo.git'\n"
+            "  exit 0\n"
+            "fi\n"
+            f"exec '{real_git}' \"$@\"\n"
+        )
+        git_wrapper.chmod(0o755)
+
+        scheduled_args = (
+            "automation",
+            "--config",
+            ".groundskeeper/config.yml",
+            "run-scheduled",
+            "daily",
+            "--schedule-id",
+            "test-factory",
+            "--source-repository-path",
+            str(repo),
+            "--daily-attempt-limit",
+            "1",
+            "--rotation",
+            "fixed",
+            "--json",
+        )
+        result = run_gk(
+            *scheduled_args,
+            cwd=repo,
+            env=env,
+        )
+
+        assert result.returncode == 0, result.stderr
+        payload = json.loads(result.stdout)
+        assert payload["status"] == "ok"
+        assert payload["data"]["execution_source"]["commit"] == source_commit
+        workspace = Path(payload["data"]["execution_source"]["workspace"])
+        assert workspace.is_relative_to(
+            state_home / "groundskeeper" / "execution-sources"
+        )
+        assert (
+            yaml.safe_load((workspace / ".groundskeeper/config.yml").read_text())[
+                "automations"
+            ]["daily"]["runner"]["skill"]
+            == "issue-implementation"
+        )
+        assert payload["data"]["runs"][0]["status"] == "review"
+        assert payload["data"]["consumed_today"] == 1
+        assert config_path.read_text() == "dirty: [invalid\n"
+        assert (repo / "local-notes.txt").read_text() == "preserve me\n"
+
+        quota_path = (
+            state_home
+            / "groundskeeper"
+            / "schedules"
+            / "test-factory"
+            / "daily-quota.json"
+        )
+        quota_path.write_text('{"date":null,"consumed":1}')
+        corrupt = run_gk(*scheduled_args, cwd=repo, env=env)
+
+        assert corrupt.returncode == 2
+        corrupt_payload = json.loads(corrupt.stdout)
+        assert corrupt_payload["status"] == "error"
+        assert corrupt_payload["exit_code"] == 2
+        assert "Traceback" not in corrupt.stderr
+
+        state_parent_file = tmp_path / "invalid-state-root"
+        state_parent_file.write_text("occupied")
+        invalid_state_env = dict(env)
+        invalid_state_env["GROUNDSKEEPER_STATE_HOME"] = str(state_parent_file)
+        invalid_state = run_gk(*scheduled_args, cwd=repo, env=invalid_state_env)
+
+        assert invalid_state.returncode == 2
+        invalid_state_payload = json.loads(invalid_state.stdout)
+        assert invalid_state_payload["status"] == "error"
+        assert invalid_state_payload["exit_code"] == 2
+        assert "Traceback" not in invalid_state.stderr
+
     def test_dry_run_is_compact_and_does_not_launch_pi_or_write_state(
         self, tmp_path: Path
     ) -> None:
