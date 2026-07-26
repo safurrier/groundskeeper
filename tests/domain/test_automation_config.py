@@ -40,10 +40,68 @@ def test_parses_explicit_source_and_target_automation() -> None:
     assert item.source.deferred_label == "factory:deferred"
     assert item.target.repository == "me/dots"
     assert item.target.repository_path == Path("/tmp/dots").resolve()
+    assert item.target.checkout.mode == "existing"
+    assert item.target.checkout.base_ref is None
+    assert item.target.checkout.refresh == "none"
     assert item.runner.skill == "issue-implementation"
     assert item.runner.approval == "allow"
     assert item.runner.session == "deterministic"
     assert item.runner.timeout_seconds == 7200
+
+
+def test_parses_isolated_worktree_checkout_policy() -> None:
+    config = _valid_automation_config()
+    config["automations"]["daily"]["target"]["checkout"] = {  # type: ignore[index]
+        "mode": "isolated-worktree",
+        "base-ref": "origin/main",
+        "refresh": "fetch",
+    }
+
+    checkout = get_automations(config)[0].target.checkout
+
+    assert checkout.mode == "isolated-worktree"
+    assert checkout.base_ref == "origin/main"
+    assert checkout.refresh == "fetch"
+
+
+@pytest.mark.parametrize(
+    ("checkout", "message"),
+    [
+        ({}, "checkout.mode"),
+        (None, "target.checkout must be a mapping"),
+        ({"mode": "unknown"}, "checkout.mode"),
+        ({"mode": "existing", "base-ref": "origin/main"}, "only valid"),
+        ({"mode": "isolated-worktree"}, "checkout.base-ref"),
+        (
+            {"mode": "isolated-worktree", "base-ref": "main", "refresh": "fetch"},
+            "origin/",
+        ),
+        (
+            {
+                "mode": "isolated-worktree",
+                "base-ref": "origin/main",
+                "refresh": "sometimes",
+            },
+            "checkout.refresh",
+        ),
+        (
+            {
+                "mode": "isolated-worktree",
+                "base-ref": "origin/main",
+                "unexpected": True,
+            },
+            "checkout.*unknown key",
+        ),
+    ],
+)
+def test_rejects_invalid_checkout_policy(
+    checkout: dict[str, object] | None, message: str
+) -> None:
+    config = _valid_automation_config()
+    config["automations"]["daily"]["target"]["checkout"] = checkout  # type: ignore[index]
+
+    with pytest.raises(ConfigError, match=message):
+        get_automations(config)
 
 
 @pytest.mark.parametrize("missing", ["source", "target"])
@@ -107,7 +165,7 @@ def test_rejects_non_positive_pi_timeout() -> None:
     [
         ("entry", "unexpected", "automations.daily"),
         ("source", "repo", "automations.daily.source"),
-        ("target", "checkout", "automations.daily.target"),
+        ("target", "checkout-policy", "automations.daily.target"),
         ("runner", "timeout_seconds", "automations.daily.runner"),
         ("policy", "concurency", "automations.daily.policy"),
         ("labels", "done", "automations.daily.source.labels"),

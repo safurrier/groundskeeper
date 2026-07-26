@@ -29,6 +29,10 @@ automations:
     target:
       repository: example/widgets
       repository-path: /Users/you/src/widgets
+      checkout:
+        mode: isolated-worktree
+        base-ref: origin/main
+        refresh: fetch
     runner:
       type: pi
       skill: issue-implementation
@@ -44,7 +48,9 @@ automations:
 Create `issue-implementation` as an ordinary skill under
 `.groundskeeper/skills/`. It receives its usual prompt plus `TASK_ID`,
 `TASK_TITLE`, `TASK_BODY`, `TASK_URL`, `REPOSITORY`,
-`FACTORY_CLOSING_REFERENCE`, `RECOVERY_CONTEXT`, and the fixed
+`FACTORY_CLOSING_REFERENCE`, `RECOVERY_CONTEXT`, typed `TARGET_CHECKOUT_MODE`,
+`TARGET_BASE_REF`, `TARGET_BASE_SHA`, `TARGET_REFRESH`,
+`TARGET_WORKSPACE_PATH`, and the fixed
 `POLICY_CONCURRENCY`, `POLICY_OUTPUT`, and `POLICY_MERGE` fields. `REPOSITORY`
 is the target repository. The closing reference is `#123` for a same-repository
 queue or `example/work-factory#123` for a cross-repository queue.
@@ -59,16 +65,24 @@ gk automation tick daily-maintenance --json
 
 `validate` checks configuration, skill resolution, the Pi executable, fixed
 policy, and that the target path is a Git worktree whose GitHub `origin` matches
-the configured target, without contacting GitHub or claiming work. Dry-run and
-live tick perform that checkout preflight before tracker access. Source issue
+the configured target, without contacting GitHub or claiming work. For an
+`isolated-worktree` target it also resolves the configured base ref. A live tick
+with `refresh: fetch` refreshes the exact `origin/*` branch under the host lock,
+then freezes its commit SHA before tracker access.
+Validation and dry-run never fetch. The target path is a donor checkout; its
+dirty working tree is neither inspected nor modified by Groundskeeper. After
+claim, Groundskeeper creates a deterministic task branch and worktree from the
+frozen SHA, runs Pi there, and reuses that same worktree and original base when
+recovering the deterministic session. Source issue
 discovery, admission, labels, dependencies, and comments stay in the source
-repository. Pi runs in the target path. Pull-request reconciliation queries the
+repository. Pull-request reconciliation queries the
 exact source issue's closing-PR connection and filters results to the target
 repository. `tick` is noninteractive and uses a host-local
-advisory lock keyed by canonical source repository identity. Locks live under `$XDG_STATE_HOME/groundskeeper/locks`
-(or `~/.local/state/groundskeeper/locks`), so separate config worktrees for the
-same repository share one host lock. `GROUNDSKEEPER_STATE_HOME` is a narrow
-host/test override. Run exactly one scheduler host for each automation;
+source-queue lock plus a target donor/worktree lock. Locks and deterministic
+task worktrees live under `$XDG_STATE_HOME/groundskeeper`
+(or `~/.local/state/groundskeeper`), so separate config worktrees share the
+same host coordination and recovery state. `GROUNDSKEEPER_STATE_HOME` is a
+narrow host/test override. Run exactly one scheduler host for each automation;
 multi-host scheduling is not supported. A tick reconciles running work first,
 then atomically reclaims deferred work, then claims new ready work. A successful
 no-work tick is safe. Before dispatch and after any worker return, Groundskeeper

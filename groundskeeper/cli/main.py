@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import shutil
+from contextlib import ExitStack
 from pathlib import Path
 
 import click
@@ -24,7 +25,12 @@ from groundskeeper.adapters.github_issues import GitHubIssuesTracker
 from groundskeeper.adapters.local_store import LocalSkillStore
 from groundskeeper.adapters.pi import PiClient
 from groundskeeper.adapters.process import ProcessClient
-from groundskeeper.adapters.target_checkout import validate_target_checkout
+from groundskeeper.adapters.target_checkout import (
+    TargetCheckoutManager,
+    prepare_target_checkout,
+    target_checkout_common_dir,
+    validate_target_checkout,
+)
 from groundskeeper.adapters.tick_lock import TickLock
 from groundskeeper.automation import AutomationService
 from groundskeeper.domain.config import (
@@ -166,10 +172,7 @@ def _automation_summary(
                 "blocked": item.source.blocked_label,
             },
         },
-        "target": {
-            "repository": item.target.repository,
-            "repository_path": str(item.target.repository_path),
-        },
+        "target": _automation_target_summary(item),
         "runner": {
             "type": item.runner.type,
             "skill": item.runner.skill,
@@ -190,6 +193,19 @@ def _automation_summary(
             "path": str(skill.source.path),
         }
     return summary
+
+
+def _automation_target_summary(item: Automation) -> dict[str, object]:
+    """Return the public typed target and checkout contract."""
+    return {
+        "repository": item.target.repository,
+        "repository_path": str(item.target.repository_path),
+        "checkout": {
+            "mode": item.target.checkout.mode,
+            "base_ref": item.target.checkout.base_ref,
+            "refresh": item.target.checkout.refresh,
+        },
+    }
 
 
 def _automation_envelope(
@@ -234,12 +250,21 @@ def _automation_state_root() -> Path:
 
 
 def _automation_lock_path(definition: Automation) -> Path:
-    """Return a stable host-local lock shared by one normalized repository."""
+    """Return the source-queue lock, preserving the pre-split lock identity."""
     repository_identity = definition.source.repository.casefold()
     repository_key = hashlib.sha256(repository_identity.encode("utf-8")).hexdigest()[
         :16
     ]
     return _automation_state_root() / "locks" / f"repository-{repository_key}.lock"
+
+
+def _automation_target_lock_path(definition: Automation, git_common_dir: Path) -> Path:
+    """Return the lock protecting one target donor and its task worktrees."""
+    target_identity = (
+        f"{definition.target.repository.casefold()}\0{git_common_dir.resolve()}"
+    )
+    target_key = hashlib.sha256(target_identity.encode("utf-8")).hexdigest()[:16]
+    return _automation_state_root() / "locks" / f"target-{target_key}.lock"
 
 
 def _resolve_automation_skill(
@@ -264,6 +289,7 @@ def _build_automation_runner(
     extra_skill_paths: tuple[str, ...],
     process: ProcessClient,
     require_available: bool = True,
+    refresh_target: bool = False,
     skill: Skill | None = None,
 ) -> PiAutomationRunner:
     """Construct the one supported typed automation runner after preflight checks."""
@@ -273,7 +299,6 @@ def _build_automation_runner(
             f"Automation '{definition.name}' repository path does not exist: "
             f"{repository_path}"
         )
-    validate_target_checkout(process, repository_path, definition.target.repository)
     resolved_skill = skill or _resolve_automation_skill(
         definition, config_path, extra_skill_paths
     )
@@ -287,10 +312,36 @@ def _build_automation_runner(
             "Pi automation requires POSIX process-group isolation; "
             "run this automation on macOS or Linux."
         )
+    if refresh_target:
+        base_sha = prepare_target_checkout(
+            process,
+            repository_path,
+            definition.target.repository,
+            definition.target.checkout,
+        )
+    else:
+        base_sha = validate_target_checkout(
+            process,
+            repository_path,
+            definition.target.repository,
+            definition.target.checkout,
+        )
+    checkout_manager = TargetCheckoutManager(
+        process,
+        repository_path,
+        definition.target.repository,
+        definition.target.checkout,
+        base_sha,
+        _automation_state_root(),
+    )
     return PiAutomationRunner(
         client,
-        repository_path,
-        AutomationSkillRenderer(resolved_skill, definition.policy),
+        checkout_manager,
+        AutomationSkillRenderer(
+            resolved_skill,
+            definition.policy,
+            definition.target.checkout,
+        ),
         definition.runner,
     )
 
@@ -481,10 +532,7 @@ def automation_inspect(ctx: click.Context, name: str, json_output: bool) -> None
     data = {
         "automation": name,
         "source": {"repository": definition.source.repository},
-        "target": {
-            "repository": definition.target.repository,
-            "repository_path": str(definition.target.repository_path),
-        },
+        "target": _automation_target_summary(definition),
         "tasks": records,
     }
     if json_output:
@@ -523,20 +571,41 @@ def automation_tick(
     try:
         definition = _load_automation(config_path, name)
         process = ProcessClient()
-        runner = _build_automation_runner(
-            definition, config_path, extra, process, require_available=not dry_run
-        )
-        tracker = GitHubIssuesTracker(
-            GhClient(process, definition.target.repository_path),
-            definition.source,
-            definition.target.repository,
-        )
-        service = AutomationService(tracker, runner)
         if dry_run:
+            runner = _build_automation_runner(
+                definition, config_path, extra, process, require_available=False
+            )
+            tracker = GitHubIssuesTracker(
+                GhClient(process, definition.target.repository_path),
+                definition.source,
+                definition.target.repository,
+            )
+            service = AutomationService(tracker, runner)
             result = service.tick(definition, dry_run=True)
         else:
-            lock_path = _automation_lock_path(definition)
-            with TickLock(lock_path):
+            target_common_dir = target_checkout_common_dir(
+                process, definition.target.repository_path
+            )
+            with ExitStack() as locks:
+                locks.enter_context(TickLock(_automation_lock_path(definition)))
+                locks.enter_context(
+                    TickLock(
+                        _automation_target_lock_path(definition, target_common_dir)
+                    )
+                )
+                runner = _build_automation_runner(
+                    definition,
+                    config_path,
+                    extra,
+                    process,
+                    refresh_target=True,
+                )
+                tracker = GitHubIssuesTracker(
+                    GhClient(process, definition.target.repository_path),
+                    definition.source,
+                    definition.target.repository,
+                )
+                service = AutomationService(tracker, runner)
                 result = service.tick(definition, dry_run=False)
     except (ConfigError, RuntimeError) as error:
         _automation_error(str(error), json_output)
@@ -558,10 +627,7 @@ def automation_tick(
     data: dict[str, object] = {
         "automation": result.automation,
         "source": {"repository": definition.source.repository},
-        "target": {
-            "repository": definition.target.repository,
-            "repository_path": str(definition.target.repository_path),
-        },
+        "target": _automation_target_summary(definition),
         "task": task_data,
         "pull_request_url": result.pull_request_url,
         "detail": result.detail,

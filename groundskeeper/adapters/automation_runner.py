@@ -7,13 +7,22 @@ from pathlib import Path
 from typing import Protocol
 
 from groundskeeper.adapters.pi import PiExecutionSettings
+from groundskeeper.adapters.target_checkout import (
+    TargetCheckoutManager,
+    TargetWorkspace,
+)
 from groundskeeper.domain.automation import (
     AdmittedTask,
     AutomationTask,
     SessionMetadata,
     WorkResult,
+    automation_task_identity,
 )
-from groundskeeper.domain.config import AutomationPolicy, PiRunnerConfig
+from groundskeeper.domain.config import (
+    AutomationCheckout,
+    AutomationPolicy,
+    PiRunnerConfig,
+)
 from groundskeeper.domain.models import Skill
 
 
@@ -28,20 +37,27 @@ class PiPromptExecutor(Protocol):
 class AutomationSkillRenderer:
     """Adds normalized task context to a configured Groundskeeper skill."""
 
-    def __init__(self, skill: Skill, policy: AutomationPolicy) -> None:
+    def __init__(
+        self,
+        skill: Skill,
+        policy: AutomationPolicy,
+        checkout: AutomationCheckout,
+    ) -> None:
         self._skill = skill
         self._policy = policy
+        self._checkout = checkout
 
     def render(
         self,
         task: AdmittedTask,
         recovery: bool,
         settings: PiExecutionSettings,
+        workspace: TargetWorkspace,
     ) -> str:
         """Render a skill without changing ordinary skill rendering behavior."""
         return (
             f"{self._skill.render()}\n\n"
-            f"{self._context(task, recovery, self._policy, settings)}"
+            f"{self._context(task, recovery, self._policy, self._checkout, workspace, settings)}"
         )
 
     @staticmethod
@@ -49,6 +65,8 @@ class AutomationSkillRenderer:
         task: AdmittedTask,
         recovery: bool,
         policy: AutomationPolicy,
+        checkout: AutomationCheckout,
+        workspace: TargetWorkspace,
         settings: PiExecutionSettings,
     ) -> str:
         recovery_context = (
@@ -72,6 +90,11 @@ class AutomationSkillRenderer:
                 f"FACTORY_TASK_KIND: {contract.kind.value}",
                 f"FACTORY_EXECUTION_MODE: {contract.mode.value if contract.mode else ''}",
                 "FACTORY_DEPENDENCY_STATUS: resolved",
+                f"TARGET_CHECKOUT_MODE: {checkout.mode}",
+                f"TARGET_BASE_REF: {checkout.base_ref or ''}",
+                f"TARGET_BASE_SHA: {workspace.base_sha or ''}",
+                f"TARGET_REFRESH: {checkout.refresh}",
+                f"TARGET_WORKSPACE_PATH: {workspace.path}",
                 f"POLICY_CONCURRENCY: {policy.concurrency}",
                 f"POLICY_OUTPUT: {policy.output}",
                 f"POLICY_MERGE: {policy.merge}",
@@ -89,22 +112,19 @@ class PiAutomationRunner:
     def __init__(
         self,
         client: PiPromptExecutor,
-        repository_path: Path,
+        checkout_manager: TargetCheckoutManager,
         renderer: AutomationSkillRenderer,
         config: PiRunnerConfig,
     ) -> None:
         self._client = client
-        self._repository_path = repository_path
+        self._checkout_manager = checkout_manager
         self._renderer = renderer
         self._config = config
 
     def _settings(self, task: AutomationTask) -> PiExecutionSettings:
         source_repository = task.source_issue.repository.casefold()
         target_repository = task.target_repository.casefold()
-        identity = (
-            f"groundskeeper:{source_repository}:{task.source_issue.number}:"
-            f"{target_repository}"
-        )
+        identity = automation_task_identity(task)
         return PiExecutionSettings(
             session_id=str(uuid.uuid5(uuid.NAMESPACE_URL, identity)),
             name=(
@@ -126,8 +146,9 @@ class PiAutomationRunner:
 
     def run(self, task: AdmittedTask, recovery: bool = False) -> WorkResult:
         settings = self._settings(task.task)
+        workspace = self._checkout_manager.workspace_for(task.task)
         return self._client.run_prompt(
-            self._renderer.render(task, recovery, settings),
-            self._repository_path,
+            self._renderer.render(task, recovery, settings, workspace),
+            workspace.path,
             settings,
         )

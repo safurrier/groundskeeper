@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
 from groundskeeper.adapters.process import ProcessClient
-from groundskeeper.domain.automation import canonical_github_repository
+from groundskeeper.domain.automation import (
+    AutomationTask,
+    automation_task_identity,
+    canonical_github_repository,
+)
+from groundskeeper.domain.config import AutomationCheckout
 
 GIT_PREFLIGHT_TIMEOUT_SECONDS = 30
 _SCP_GITHUB_REMOTE_RE = re.compile(r"^[^@/:]+@github\.com:(?P<repository>[^/]+/[^/]+)$")
@@ -15,6 +22,183 @@ _SCP_GITHUB_REMOTE_RE = re.compile(r"^[^@/:]+@github\.com:(?P<repository>[^/]+/[
 
 class TargetCheckoutError(RuntimeError):
     """The configured target path does not identify the declared repository."""
+
+
+def target_checkout_common_dir(process: ProcessClient, path: Path) -> Path:
+    """Return the normalized Git metadata directory shared by linked worktrees."""
+    result = process.run(
+        ("git", "rev-parse", "--git-common-dir"),
+        path,
+        timeout=GIT_PREFLIGHT_TIMEOUT_SECONDS,
+    )
+    if not result.success or not result.stdout.strip():
+        detail = result.stderr.strip() or result.stdout.strip() or "unknown error"
+        raise TargetCheckoutError(
+            f"could not identify target workspace Git directory: {detail}"
+        )
+    common_dir = Path(result.stdout.strip())
+    return (
+        common_dir.resolve()
+        if common_dir.is_absolute()
+        else (path / common_dir).resolve()
+    )
+
+
+@dataclass(frozen=True)
+class TargetWorkspace:
+    """Execution checkout and its immutable task base."""
+
+    path: Path
+    base_sha: str | None
+
+
+class TargetCheckoutManager:
+    """Own deterministic task worktrees above one validated donor checkout."""
+
+    def __init__(
+        self,
+        process: ProcessClient,
+        repository_path: Path,
+        expected_repository: str,
+        checkout: AutomationCheckout,
+        candidate_base_sha: str | None,
+        state_root: Path,
+    ) -> None:
+        self._process = process
+        self._repository_path = repository_path
+        self._expected_repository = expected_repository
+        self._checkout = checkout
+        self._candidate_base_sha = candidate_base_sha
+        self._state_root = state_root
+
+    def workspace_for(self, task: AutomationTask) -> TargetWorkspace:
+        """Create or reuse the task checkout selected by the typed policy."""
+        if task.target_repository.casefold() != self._expected_repository.casefold():
+            raise TargetCheckoutError(
+                "task target repository does not match the prepared checkout: "
+                f"expected {self._expected_repository}, found {task.target_repository}"
+            )
+        if self._checkout.mode == "existing":
+            return TargetWorkspace(self._repository_path, None)
+        if self._candidate_base_sha is None:
+            raise TargetCheckoutError(
+                "isolated-worktree checkout has no resolved candidate base"
+            )
+
+        task_key = hashlib.sha256(
+            automation_task_identity(task).encode("utf-8")
+        ).hexdigest()[:16]
+        target_key = hashlib.sha256(
+            (
+                f"{self._expected_repository.casefold()}\0"
+                f"{target_checkout_common_dir(self._process, self._repository_path)}"
+            ).encode()
+        ).hexdigest()[:16]
+        workspace_path = self._state_root / "worktrees" / target_key / task_key
+        branch = f"groundskeeper/task-{task_key}"
+        branch_ref = f"refs/heads/{branch}"
+        base_ref = f"refs/groundskeeper/bases/{task_key}"
+        workspace_exists = workspace_path.exists()
+        branch_exists = self._resolve_optional_ref(branch_ref) is not None
+        pinned_base = self._resolve_optional_ref(base_ref)
+        if pinned_base is None:
+            if workspace_exists or branch_exists:
+                raise TargetCheckoutError(
+                    "target workspace state exists without its immutable base pin; "
+                    f"manual recovery is required for {workspace_path}"
+                )
+            self._run_or_raise(
+                ("git", "update-ref", base_ref, self._candidate_base_sha, ""),
+                "could not pin the immutable task base",
+            )
+            pinned_base = self._candidate_base_sha
+
+        if workspace_exists:
+            if not workspace_path.is_dir():
+                raise TargetCheckoutError(
+                    f"target workspace path is not a directory: {workspace_path}"
+                )
+            if not branch_exists:
+                raise TargetCheckoutError(
+                    "target workspace exists without its deterministic branch: "
+                    f"{workspace_path}"
+                )
+            self._validate_reused_workspace(workspace_path, branch_ref)
+        else:
+            try:
+                workspace_path.parent.mkdir(parents=True, exist_ok=True)
+            except OSError as error:
+                raise TargetCheckoutError(
+                    f"could not create target workspace directory: {error}"
+                ) from error
+            if branch_exists:
+                argv = ("git", "worktree", "add", str(workspace_path), branch)
+            else:
+                argv = (
+                    "git",
+                    "worktree",
+                    "add",
+                    "-b",
+                    branch,
+                    str(workspace_path),
+                    pinned_base,
+                )
+            self._run_or_raise(argv, "could not create or recover the target workspace")
+        return TargetWorkspace(workspace_path, pinned_base)
+
+    def _resolve_optional_ref(self, ref: str) -> str | None:
+        result = self._process.run(
+            (
+                "git",
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "--end-of-options",
+                f"{ref}^{{commit}}",
+            ),
+            self._repository_path,
+            timeout=GIT_PREFLIGHT_TIMEOUT_SECONDS,
+        )
+        if result.success and result.stdout.strip():
+            return result.stdout.strip()
+        if result.exit_code == 1:
+            return None
+        detail = result.stderr.strip() or result.stdout.strip() or "unknown error"
+        raise TargetCheckoutError(
+            f"could not resolve target workspace ref {ref}: {detail}"
+        )
+
+    def _validate_reused_workspace(
+        self, workspace_path: Path, expected_branch_ref: str
+    ) -> None:
+        donor_common_dir = target_checkout_common_dir(
+            self._process, self._repository_path
+        )
+        workspace_common_dir = target_checkout_common_dir(self._process, workspace_path)
+        if workspace_common_dir != donor_common_dir:
+            raise TargetCheckoutError(
+                "target workspace belongs to a different Git repository: "
+                f"{workspace_path}"
+            )
+        branch = self._process.run(
+            ("git", "symbolic-ref", "--quiet", "HEAD"),
+            workspace_path,
+            timeout=GIT_PREFLIGHT_TIMEOUT_SECONDS,
+        )
+        if not branch.success or branch.stdout.strip() != expected_branch_ref:
+            raise TargetCheckoutError(
+                f"target workspace is not on its deterministic branch: {workspace_path}"
+            )
+
+    def _run_or_raise(self, argv: tuple[str, ...], action: str) -> None:
+        result = self._process.run(
+            argv,
+            self._repository_path,
+            timeout=GIT_PREFLIGHT_TIMEOUT_SECONDS,
+        )
+        if not result.success:
+            detail = result.stderr.strip() or result.stdout.strip() or "unknown error"
+            raise TargetCheckoutError(f"{action}: {detail}")
 
 
 def _repository_from_remote(remote: str) -> str:
@@ -41,6 +225,49 @@ def _repository_from_remote(remote: str) -> str:
 
 
 def validate_target_checkout(
+    process: ProcessClient,
+    repository_path: Path,
+    expected_repository: str,
+    checkout: AutomationCheckout | None = None,
+) -> str | None:
+    """Prove the donor path, origin, and configured base ref without mutation."""
+    checkout = checkout or AutomationCheckout()
+    _validate_target_repository(process, repository_path, expected_repository)
+    return _validate_base_ref(process, repository_path, checkout)
+
+
+def prepare_target_checkout(
+    process: ProcessClient,
+    repository_path: Path,
+    expected_repository: str,
+    checkout: AutomationCheckout,
+) -> str | None:
+    """Refresh and prove a live isolated-worktree donor before tracker access."""
+    _validate_target_repository(process, repository_path, expected_repository)
+    if checkout.mode == "isolated-worktree" and checkout.refresh == "fetch":
+        if (
+            checkout.base_ref is None
+        ):  # Defensive: config parsing already requires this.
+            raise TargetCheckoutError("isolated-worktree checkout requires a base ref")
+        branch = checkout.base_ref.removeprefix("origin/")
+        refresh = process.run(
+            (
+                "git",
+                "fetch",
+                "--no-tags",
+                "origin",
+                f"+refs/heads/{branch}:refs/remotes/origin/{branch}",
+            ),
+            repository_path,
+            timeout=GIT_PREFLIGHT_TIMEOUT_SECONDS,
+        )
+        if not refresh.success:
+            detail = refresh.stderr.strip() or refresh.stdout.strip() or "unknown error"
+            raise TargetCheckoutError(f"target checkout refresh failed: {detail}")
+    return _validate_base_ref(process, repository_path, checkout)
+
+
+def _validate_target_repository(
     process: ProcessClient, repository_path: Path, expected_repository: str
 ) -> None:
     """Prove the target path is a Git worktree for the configured origin."""
@@ -68,3 +295,30 @@ def validate_target_checkout(
             "target checkout origin repository does not match target.repository: "
             f"expected {expected_repository}, found {actual_repository}"
         )
+
+
+def _validate_base_ref(
+    process: ProcessClient, repository_path: Path, checkout: AutomationCheckout
+) -> str | None:
+    """Require the typed isolated-worktree base to resolve to one commit."""
+    if checkout.mode == "existing":
+        return None
+    if checkout.base_ref is None:  # Defensive: config parsing already requires this.
+        raise TargetCheckoutError("isolated-worktree checkout requires a base ref")
+    resolved = process.run(
+        (
+            "git",
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "--end-of-options",
+            f"{checkout.base_ref}^{{commit}}",
+        ),
+        repository_path,
+        timeout=GIT_PREFLIGHT_TIMEOUT_SECONDS,
+    )
+    if not resolved.success or not resolved.stdout.strip():
+        raise TargetCheckoutError(
+            f"target checkout base ref does not resolve to a commit: {checkout.base_ref}"
+        )
+    return resolved.stdout.strip()

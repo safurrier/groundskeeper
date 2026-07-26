@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -238,6 +239,7 @@ def _deferred_factory_repo(tmp_path: Path) -> tuple[Path, dict[str, str], Path, 
     pi = binary_dir / "pi"
     pi.write_text(
         "#!/bin/sh\n"
+        f"echo \"cwd=$(pwd)\" >> '{pi_log}'\n"
         f"echo \"$*\" >> '{pi_log}'\n"
         f"COUNT=$(cat '{attempts}')\nCOUNT=$((COUNT + 1))\necho $COUNT > '{attempts}'\n"
         f"if [ \"$COUNT\" -lt 3 ]; then echo 'Codex usage limit reached; retry later' >&2; exit 1; fi\n"
@@ -323,6 +325,222 @@ class TestAutomationE2E:
         assert validated_automation["source"]["repository"] == "source/queue"
         assert validated_automation["target"]["repository"] == "target/repo"
         assert json.loads(validated.stdout)["version"] == 2
+
+    def test_validate_resolves_isolated_checkout_base_through_real_process(
+        self, tmp_path: Path
+    ) -> None:
+        repo, env = _factory_repo(tmp_path, "[]")
+        (repo / "tracked.txt").write_text("base\n")
+        subprocess.run(["git", "add", "tracked.txt"], cwd=repo, check=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=Groundskeeper Test",
+                "-c",
+                "user.email=groundskeeper@example.com",
+                "commit",
+                "-qm",
+                "base",
+            ],
+            cwd=repo,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "update-ref", "refs/remotes/origin/main", "HEAD"],
+            cwd=repo,
+            check=True,
+        )
+        config_path = repo / ".groundskeeper/config.yml"
+        config = yaml.safe_load(config_path.read_text())
+        config["automations"]["daily"]["target"]["checkout"] = {
+            "mode": "isolated-worktree",
+            "base-ref": "origin/main",
+            "refresh": "none",
+        }
+        config_path.write_text(yaml.safe_dump(config, sort_keys=False))
+
+        validated = run_gk(
+            "automation", "validate", "daily", "--json", cwd=repo, env=env
+        )
+
+        assert validated.returncode == 0
+        checkout = json.loads(validated.stdout)["data"]["automations"][0]["target"][
+            "checkout"
+        ]
+        assert checkout == {
+            "mode": "isolated-worktree",
+            "base_ref": "origin/main",
+            "refresh": "none",
+        }
+
+    def test_live_tick_fetches_immutable_base_without_modifying_dirty_donor(
+        self, tmp_path: Path
+    ) -> None:
+        repo, env, _, pi_log = _deferred_factory_repo(tmp_path)
+        state_home = tmp_path / "state"
+        env["GROUNDSKEEPER_STATE_HOME"] = str(state_home)
+        real_git = shutil.which("git")
+        assert real_git is not None
+        remote = tmp_path / "remote.git"
+        updater = tmp_path / "updater"
+        subprocess.run([real_git, "init", "--bare", "-q", remote], check=True)
+        subprocess.run(
+            [real_git, "remote", "set-url", "origin", remote], cwd=repo, check=True
+        )
+        subprocess.run([real_git, "switch", "-c", "main"], cwd=repo, check=True)
+        (repo / "tracked.txt").write_text("donor base\n")
+        subprocess.run([real_git, "add", "tracked.txt"], cwd=repo, check=True)
+        subprocess.run(
+            [
+                real_git,
+                "-c",
+                "user.name=Groundskeeper Test",
+                "-c",
+                "user.email=groundskeeper@example.com",
+                "commit",
+                "-qm",
+                "donor base",
+            ],
+            cwd=repo,
+            check=True,
+        )
+        subprocess.run(
+            [real_git, "push", "-q", "-u", "origin", "main"], cwd=repo, check=True
+        )
+        donor_head = subprocess.run(
+            [real_git, "rev-parse", "HEAD"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        (repo / "unrelated.txt").write_text("preserve me\n")
+
+        subprocess.run(
+            [real_git, "clone", "-q", "-b", "main", remote, updater], check=True
+        )
+        (updater / "tracked.txt").write_text("remote advance\n")
+        subprocess.run([real_git, "add", "tracked.txt"], cwd=updater, check=True)
+        subprocess.run(
+            [
+                real_git,
+                "-c",
+                "user.name=Groundskeeper Test",
+                "-c",
+                "user.email=groundskeeper@example.com",
+                "commit",
+                "-qm",
+                "remote advance",
+            ],
+            cwd=updater,
+            check=True,
+        )
+        subprocess.run(
+            [real_git, "push", "-q", "origin", "main"], cwd=updater, check=True
+        )
+        remote_head = subprocess.run(
+            [real_git, "rev-parse", "HEAD"],
+            cwd=updater,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+        config_path = repo / ".groundskeeper/config.yml"
+        config = yaml.safe_load(config_path.read_text())
+        config["automations"]["daily"]["target"]["checkout"] = {
+            "mode": "isolated-worktree",
+            "base-ref": "origin/main",
+            "refresh": "fetch",
+        }
+        config_path.write_text(yaml.safe_dump(config, sort_keys=False))
+
+        binary_dir = tmp_path / "bin"
+        git_wrapper = binary_dir / "git"
+        git_wrapper.write_text(
+            "#!/bin/sh\n"
+            'if [ "$*" = "remote get-url origin" ]; then\n'
+            "  printf '%s\\n' 'git@github.com:target/repo.git'\n"
+            "  exit 0\n"
+            "fi\n"
+            f"exec '{real_git}' \"$@\"\n"
+        )
+        git_wrapper.chmod(0o755)
+
+        first = run_gk("automation", "tick", "daily", "--json", cwd=repo, env=env)
+
+        (updater / "tracked.txt").write_text("remote moves again\n")
+        subprocess.run([real_git, "add", "tracked.txt"], cwd=updater, check=True)
+        subprocess.run(
+            [
+                real_git,
+                "-c",
+                "user.name=Groundskeeper Test",
+                "-c",
+                "user.email=groundskeeper@example.com",
+                "commit",
+                "-qm",
+                "remote moves again",
+            ],
+            cwd=updater,
+            check=True,
+        )
+        subprocess.run(
+            [real_git, "push", "-q", "origin", "main"], cwd=updater, check=True
+        )
+        newer_remote_head = subprocess.run(
+            [real_git, "rev-parse", "HEAD"],
+            cwd=updater,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+        second = run_gk("automation", "tick", "daily", "--json", cwd=repo, env=env)
+        third = run_gk("automation", "tick", "daily", "--json", cwd=repo, env=env)
+
+        assert first.returncode == second.returncode == third.returncode == 0
+        assert [
+            json.loads(first.stdout)["status"],
+            json.loads(second.stdout)["status"],
+            json.loads(third.stdout)["status"],
+        ] == ["deferred", "deferred", "review"]
+        pi_calls = pi_log.read_text().splitlines()
+        workspaces = {
+            line.removeprefix("cwd=") for line in pi_calls if line.startswith("cwd=")
+        }
+        assert len(workspaces) == 1
+        workspace = Path(workspaces.pop())
+        assert workspace != repo
+        assert workspace.is_relative_to(state_home / "groundskeeper" / "worktrees")
+        prompt_log = "\n".join(pi_calls)
+        assert prompt_log.count("TARGET_CHECKOUT_MODE: isolated-worktree") == 3
+        assert prompt_log.count("TARGET_BASE_REF: origin/main") == 3
+        assert prompt_log.count(f"TARGET_BASE_SHA: {remote_head}") == 3
+        assert newer_remote_head not in prompt_log
+        assert (
+            subprocess.run(
+                [real_git, "rev-parse", "HEAD"],
+                cwd=workspace,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            == remote_head
+        )
+        assert (
+            subprocess.run(
+                [real_git, "rev-parse", "HEAD"],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            == donor_head
+        )
+        assert (repo / "tracked.txt").read_text() == "donor base\n"
+        assert (repo / "unrelated.txt").read_text() == "preserve me\n"
 
     def test_dry_run_is_compact_and_does_not_launch_pi_or_write_state(
         self, tmp_path: Path

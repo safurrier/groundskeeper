@@ -10,6 +10,14 @@ index:
 
 # Future Work
 
+## Automation task-worktree retention
+
+`target.checkout.mode: isolated-worktree` deliberately retains one deterministic
+worktree, local branch, and pinned base ref per task for review and recovery.
+Add a lock-protected inspection and garbage-collection command that removes only
+workspaces whose tracker task and pull request are durably terminal. It must
+preserve active, deferred, running, and reviewable work by default.
+
 ## Worktree-isolated parallel execution (`--parallel --isolate`)
 
 Currently, parallel stages run skills in the same working directory via ThreadPoolExecutor. This is safe for read-only skills but risky for writers. Full isolation would give each skill in a parallel group its own git worktree:

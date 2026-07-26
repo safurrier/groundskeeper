@@ -22,6 +22,10 @@ from groundskeeper.adapters.process import (
     CommandResult,
     ProcessClient,
 )
+from groundskeeper.adapters.target_checkout import (
+    TargetCheckoutManager,
+    TargetWorkspace,
+)
 from groundskeeper.domain.automation import (
     AdmittedTask,
     AutomationTask,
@@ -29,7 +33,11 @@ from groundskeeper.domain.automation import (
     GitHubIssueIdentity,
     WorkResult,
 )
-from groundskeeper.domain.config import AutomationPolicy, PiRunnerConfig
+from groundskeeper.domain.config import (
+    AutomationCheckout,
+    AutomationPolicy,
+    PiRunnerConfig,
+)
 from groundskeeper.domain.models import Skill, SkillSource
 from groundskeeper.domain.task_contract import (
     ExecutionMode,
@@ -74,8 +82,15 @@ def _admitted(task: AutomationTask) -> AdmittedTask:
 def _runner(client: FakePiClient) -> PiAutomationRunner:
     return PiAutomationRunner(
         client,
-        Path("/repos/dots"),
-        AutomationSkillRenderer(_skill(), AutomationPolicy()),
+        TargetCheckoutManager(
+            ProcessClient(),
+            Path("/repos/dots"),
+            "target/repo",
+            AutomationCheckout(),
+            None,
+            Path("/state"),
+        ),
+        AutomationSkillRenderer(_skill(), AutomationPolicy(), AutomationCheckout()),
         PiRunnerConfig(skill="issue-implementation"),
     )
 
@@ -104,6 +119,11 @@ def test_pi_runner_renders_normalized_task_context_with_typed_settings() -> None
     assert "FACTORY_TASK_KIND: runnable" in client.prompt
     assert "FACTORY_EXECUTION_MODE: full" in client.prompt
     assert "FACTORY_DEPENDENCY_STATUS: resolved" in client.prompt
+    assert "TARGET_CHECKOUT_MODE: existing" in client.prompt
+    assert "TARGET_BASE_REF: " in client.prompt
+    assert "TARGET_BASE_SHA: " in client.prompt
+    assert "TARGET_REFRESH: none" in client.prompt
+    assert "TARGET_WORKSPACE_PATH: /repos/dots" in client.prompt
     assert "RECOVERY_CONTEXT: Start a new deterministic session" in client.prompt
     assert client.cwd == Path("/repos/dots")
     assert client.settings is not None
@@ -119,6 +139,39 @@ def test_pi_runner_renders_normalized_task_context_with_typed_settings() -> None
         f"FACTORY_RESUME_COMMAND: pi --session {client.settings.session_id}"
         in client.prompt
     )
+
+
+def test_pi_renderer_includes_isolated_checkout_contract() -> None:
+    checkout = AutomationCheckout("isolated-worktree", "origin/main", "fetch")
+    renderer = AutomationSkillRenderer(_skill(), AutomationPolicy(), checkout)
+    task = AutomationTask(
+        "github",
+        "Fix it",
+        "Acceptance",
+        "https://issue/3",
+        "alex",
+        GitHubIssueIdentity("source/queue", 3),
+        "target/repo",
+        contract=_contract(),
+    )
+    settings = PiExecutionSettings(
+        session_id="session-id",
+        name="session-name",
+        timeout_seconds=7200,
+    )
+
+    prompt = renderer.render(
+        _admitted(task),
+        False,
+        settings,
+        TargetWorkspace(Path("/workspaces/task"), "abc123"),
+    )
+
+    assert "TARGET_CHECKOUT_MODE: isolated-worktree" in prompt
+    assert "TARGET_BASE_REF: origin/main" in prompt
+    assert "TARGET_BASE_SHA: abc123" in prompt
+    assert "TARGET_REFRESH: fetch" in prompt
+    assert "TARGET_WORKSPACE_PATH: /workspaces/task" in prompt
 
 
 def test_same_repository_task_renders_short_closing_reference() -> None:
