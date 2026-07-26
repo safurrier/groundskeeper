@@ -256,7 +256,7 @@ def prepare_target_checkout(
                 "fetch",
                 "--no-tags",
                 "origin",
-                f"refs/heads/{branch}:refs/remotes/origin/{branch}",
+                f"+refs/heads/{branch}:refs/remotes/origin/{branch}",
             ),
             repository_path,
             timeout=GIT_PREFLIGHT_TIMEOUT_SECONDS,

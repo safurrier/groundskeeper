@@ -138,7 +138,7 @@ def test_live_isolated_checkout_fetches_before_resolving_base() -> None:
             "fetch",
             "--no-tags",
             "origin",
-            "refs/heads/main:refs/remotes/origin/main",
+            "+refs/heads/main:refs/remotes/origin/main",
         ),
         (
             "git",

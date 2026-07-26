@@ -140,6 +140,7 @@ def test_repository_locks_are_host_scoped_and_identity_stable(
     assert _automation_lock_path(queue_a) != _automation_target_lock_path(
         queue_a, common_dir
     )
+    assert _automation_lock_path(queue_a).name.startswith("repository-")
     assert (
         _automation_lock_path(queue_a).parent
         == tmp_path / "state" / "groundskeeper" / "locks"

@@ -250,12 +250,12 @@ def _automation_state_root() -> Path:
 
 
 def _automation_lock_path(definition: Automation) -> Path:
-    """Return the source-queue lock used for task admission."""
+    """Return the source-queue lock, preserving the pre-split lock identity."""
     repository_identity = definition.source.repository.casefold()
     repository_key = hashlib.sha256(repository_identity.encode("utf-8")).hexdigest()[
         :16
     ]
-    return _automation_state_root() / "locks" / f"source-{repository_key}.lock"
+    return _automation_state_root() / "locks" / f"repository-{repository_key}.lock"
 
 
 def _automation_target_lock_path(definition: Automation, git_common_dir: Path) -> Path:
