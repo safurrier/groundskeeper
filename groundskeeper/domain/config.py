@@ -225,8 +225,6 @@ def _parse_skill_ref(entry: Any) -> SkillRef | None:
 
 def _parse_automation_checkout(raw: object, entry_path: str) -> AutomationCheckout:
     """Parse the optional strict target checkout policy."""
-    if raw is None:
-        return AutomationCheckout()
     checkout = _automation_mapping(raw, f"{entry_path}.target.checkout")
     _reject_unknown_automation_keys(
         checkout,
@@ -462,7 +460,11 @@ def get_automations(config: Mapping[str, object]) -> list[Automation]:
             {"repository", "repository-path", "checkout"},
             f"{entry_path}.target",
         )
-        checkout = _parse_automation_checkout(target.get("checkout"), entry_path)
+        checkout = (
+            _parse_automation_checkout(target["checkout"], entry_path)
+            if "checkout" in target
+            else AutomationCheckout()
+        )
         if not isinstance(runner, dict):
             raise ConfigError(f"Automation '{name}' requires runner.type: pi")
         runner = _automation_mapping(runner, f"{entry_path}.runner")

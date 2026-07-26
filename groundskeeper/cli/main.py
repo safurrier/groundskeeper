@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import shutil
+from contextlib import ExitStack
 from pathlib import Path
 
 import click
@@ -25,7 +26,9 @@ from groundskeeper.adapters.local_store import LocalSkillStore
 from groundskeeper.adapters.pi import PiClient
 from groundskeeper.adapters.process import ProcessClient
 from groundskeeper.adapters.target_checkout import (
+    TargetCheckoutManager,
     prepare_target_checkout,
+    target_checkout_common_dir,
     validate_target_checkout,
 )
 from groundskeeper.adapters.tick_lock import TickLock
@@ -247,12 +250,21 @@ def _automation_state_root() -> Path:
 
 
 def _automation_lock_path(definition: Automation) -> Path:
-    """Return a stable host-local lock shared by one normalized repository."""
+    """Return the source-queue lock used for task admission."""
     repository_identity = definition.source.repository.casefold()
     repository_key = hashlib.sha256(repository_identity.encode("utf-8")).hexdigest()[
         :16
     ]
-    return _automation_state_root() / "locks" / f"repository-{repository_key}.lock"
+    return _automation_state_root() / "locks" / f"source-{repository_key}.lock"
+
+
+def _automation_target_lock_path(definition: Automation, git_common_dir: Path) -> Path:
+    """Return the lock protecting one target donor and its task worktrees."""
+    target_identity = (
+        f"{definition.target.repository.casefold()}\0{git_common_dir.resolve()}"
+    )
+    target_key = hashlib.sha256(target_identity.encode("utf-8")).hexdigest()[:16]
+    return _automation_state_root() / "locks" / f"target-{target_key}.lock"
 
 
 def _resolve_automation_skill(
@@ -287,6 +299,19 @@ def _build_automation_runner(
             f"Automation '{definition.name}' repository path does not exist: "
             f"{repository_path}"
         )
+    resolved_skill = skill or _resolve_automation_skill(
+        definition, config_path, extra_skill_paths
+    )
+    client = PiClient(process)
+    if require_available and not client.is_available():
+        raise ConfigError(
+            "Pi CLI not found. Install Pi and retry 'gk automation validate'."
+        )
+    if require_available and not client.supports_automation():
+        raise ConfigError(
+            "Pi automation requires POSIX process-group isolation; "
+            "run this automation on macOS or Linux."
+        )
     if refresh_target:
         base_sha = prepare_target_checkout(
             process,
@@ -301,27 +326,21 @@ def _build_automation_runner(
             definition.target.repository,
             definition.target.checkout,
         )
-    resolved_skill = skill or _resolve_automation_skill(
-        definition, config_path, extra_skill_paths
+    checkout_manager = TargetCheckoutManager(
+        process,
+        repository_path,
+        definition.target.repository,
+        definition.target.checkout,
+        base_sha,
+        _automation_state_root(),
     )
-    client = PiClient(process)
-    if require_available and not client.is_available():
-        raise ConfigError(
-            "Pi CLI not found. Install Pi and retry 'gk automation validate'."
-        )
-    if require_available and not client.supports_automation():
-        raise ConfigError(
-            "Pi automation requires POSIX process-group isolation; "
-            "run this automation on macOS or Linux."
-        )
     return PiAutomationRunner(
         client,
-        repository_path,
+        checkout_manager,
         AutomationSkillRenderer(
             resolved_skill,
             definition.policy,
             definition.target.checkout,
-            base_sha,
         ),
         definition.runner,
     )
@@ -564,8 +583,16 @@ def automation_tick(
             service = AutomationService(tracker, runner)
             result = service.tick(definition, dry_run=True)
         else:
-            lock_path = _automation_lock_path(definition)
-            with TickLock(lock_path):
+            target_common_dir = target_checkout_common_dir(
+                process, definition.target.repository_path
+            )
+            with ExitStack() as locks:
+                locks.enter_context(TickLock(_automation_lock_path(definition)))
+                locks.enter_context(
+                    TickLock(
+                        _automation_target_lock_path(definition, target_common_dir)
+                    )
+                )
                 runner = _build_automation_runner(
                     definition,
                     config_path,

@@ -82,16 +82,17 @@ automation config
   → strict source queue, target repository/path/checkout, runner, labels, timeout, and policy parsing
   → resolve configured skill with provenance
   → validation/dry-run: prove target identity and resolve the optional base without donor mutation
-  → live tick: acquire the stable host-state lock for canonical source repository identity
+  → live tick: acquire stable source-admission and target-workspace host locks
   → live tick: prove target identity, optionally fetch the exact origin branch, and freeze its commit SHA
   → reconcile running issues before deferred work before ready work
   → parse one exact Factory Task + Dependencies contract and resolve dependency state
   → block malformed, tracking, inaccessible, unresolved, or closed-unmerged dependency work before Pi
   → atomically claim at most one admitted trusted deferred or ready task
+  → create or reuse the deterministic task branch/worktree from its pinned original base
   → normalize the repository-qualified source issue and explicit target identity
   → render configured skill + typed closing/task-contract/checkout/recovery/policy/session context
   → require POSIX process-group isolation
-  → run Pi in the target checkout with a deterministic session keyed by source + issue + target
+  → run Pi in the task worktree with a deterministic session keyed by source + issue + target
       stdout + stderr → separately preserved and tee'd to live scheduler logs
       stdout → PR URL parsing + strict public blocker marker extraction
       stderr → transient/durable provider failure classification
@@ -121,12 +122,14 @@ session. A repeat transient failure returns it to `deferred`; a later accepted
 draft PR reaches `review`.
 
 The source repository owns discovery, admission, dependencies, labels, comments,
-and lifecycle. The target repository/path/checkout contract owns Pi cwd,
-rendered `REPOSITORY`, immutable task-worktree base identity, and accepted draft
-PR discovery. The workflow instructions belong to the
-configured skill; the Pi adapter knows only how to execute a rendered prompt. `merge: never` is an accepted-result
-contract, not a credential sandbox. Host-state locking coordinates config
-worktrees on one machine and does not provide distributed locking.
+and lifecycle. The target checkout module owns donor validation and refresh,
+immutable task-base pinning, deterministic branch/worktree recovery, and Pi cwd.
+The target repository also scopes rendered `REPOSITORY` and accepted draft PR
+discovery. Workflow instructions belong to the configured skill; they do not
+own Git checkout mechanics. The Pi adapter knows only how to execute a rendered
+prompt. `merge: never` is an accepted-result contract, not a credential sandbox.
+Host-state locking coordinates source admission and target workspaces on one
+machine and does not provide distributed locking.
 
 ## CI Generation Flow
 

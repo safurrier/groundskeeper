@@ -7,7 +7,11 @@ import yaml
 from click.testing import CliRunner
 
 from groundskeeper.adapters.tick_lock import TickAlreadyRunningError
-from groundskeeper.cli.main import _automation_lock_path, cli
+from groundskeeper.cli.main import (
+    _automation_lock_path,
+    _automation_target_lock_path,
+    cli,
+)
 from groundskeeper.domain.automation import (
     AutomationTask,
     GitHubIssueIdentity,
@@ -26,6 +30,10 @@ def _accept_target_checkout(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "groundskeeper.cli.main.prepare_target_checkout",
         lambda process, repository_path, expected_repository, checkout: None,
+    )
+    monkeypatch.setattr(
+        "groundskeeper.cli.main.target_checkout_common_dir",
+        lambda process, repository_path: repository_path / ".git",
     )
 
 
@@ -125,6 +133,13 @@ def test_repository_locks_are_host_scoped_and_identity_stable(
     )[0]
     assert _automation_lock_path(queue_a) == _automation_lock_path(queue_b)
     assert _automation_lock_path(queue_a) != _automation_lock_path(other_repo)
+    common_dir = tmp_path / "git-common"
+    assert _automation_target_lock_path(
+        queue_a, common_dir
+    ) == _automation_target_lock_path(other_repo, common_dir)
+    assert _automation_lock_path(queue_a) != _automation_target_lock_path(
+        queue_a, common_dir
+    )
     assert (
         _automation_lock_path(queue_a).parent
         == tmp_path / "state" / "groundskeeper" / "locks"
@@ -337,6 +352,28 @@ def test_unsupported_host_fails_before_tracker_mutation(
     mock_tick.assert_not_called()  # type: ignore[attr-defined]
 
 
+@patch("groundskeeper.cli.main.prepare_target_checkout")
+@patch("groundskeeper.cli.main.PiClient.is_available", return_value=False)
+@patch("groundskeeper.cli.main.AutomationService.tick")
+def test_missing_pi_fails_before_target_refresh(
+    mock_tick: object,
+    mock_available: object,
+    mock_prepare: object,
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        Path(".groundskeeper").mkdir(exist_ok=True)
+        Path(".groundskeeper/config.yml").write_text(CONFIG)
+        result = runner.invoke(cli, ["automation", "tick", "daily-dev", "--json"])
+
+    assert result.exit_code == 2
+    assert "Pi CLI not found" in json.loads(result.output)["data"]["error"]
+    mock_available.assert_called_once()  # type: ignore[attr-defined]
+    mock_prepare.assert_not_called()  # type: ignore[attr-defined]
+    mock_tick.assert_not_called()  # type: ignore[attr-defined]
+
+
 def test_text_errors_use_documented_exit_code(tmp_path: Path) -> None:
     runner = CliRunner()
     with runner.isolated_filesystem(temp_dir=tmp_path):
@@ -405,6 +442,24 @@ def test_strict_config_errors_offer_copyable_corrections(
         result = runner.invoke(cli, ["automation", "validate", "daily-dev", "--json"])
     assert result.exit_code == 2
     assert f"Use '{replacement}'." in json.loads(result.output)["data"]["error"]
+
+
+def test_explicit_null_checkout_fails_closed_in_cli_validation(tmp_path: Path) -> None:
+    invalid_config = CONFIG.replace(
+        "      repository-path: /tmp",
+        "      repository-path: /tmp\n      checkout:",
+    )
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        Path(".groundskeeper").mkdir(exist_ok=True)
+        Path(".groundskeeper/config.yml").write_text(invalid_config)
+        result = runner.invoke(cli, ["automation", "validate", "daily-dev", "--json"])
+
+    assert result.exit_code == 2
+    assert (
+        "target.checkout must be a mapping"
+        in json.loads(result.output)["data"]["error"]
+    )
 
 
 def test_malformed_config_json_envelope(tmp_path: Path) -> None:

@@ -73,6 +73,14 @@ class AutomationTask:
     contract: FactoryTaskContract | None = None
 
 
+def automation_task_identity(task: AutomationTask) -> str:
+    """Return the stable identity shared by sessions and task worktrees."""
+    return (
+        f"groundskeeper:{task.source_issue.repository.casefold()}:"
+        f"{task.source_issue.number}:{task.target_repository.casefold()}"
+    )
+
+
 class AdmissionState(str, Enum):
     """Machine-readable reason that one task may or may not run."""
 

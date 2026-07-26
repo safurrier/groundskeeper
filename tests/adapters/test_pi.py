@@ -22,6 +22,10 @@ from groundskeeper.adapters.process import (
     CommandResult,
     ProcessClient,
 )
+from groundskeeper.adapters.target_checkout import (
+    TargetCheckoutManager,
+    TargetWorkspace,
+)
 from groundskeeper.domain.automation import (
     AdmittedTask,
     AutomationTask,
@@ -78,7 +82,14 @@ def _admitted(task: AutomationTask) -> AdmittedTask:
 def _runner(client: FakePiClient) -> PiAutomationRunner:
     return PiAutomationRunner(
         client,
-        Path("/repos/dots"),
+        TargetCheckoutManager(
+            ProcessClient(),
+            Path("/repos/dots"),
+            "target/repo",
+            AutomationCheckout(),
+            None,
+            Path("/state"),
+        ),
         AutomationSkillRenderer(_skill(), AutomationPolicy(), AutomationCheckout()),
         PiRunnerConfig(skill="issue-implementation"),
     )
@@ -112,6 +123,7 @@ def test_pi_runner_renders_normalized_task_context_with_typed_settings() -> None
     assert "TARGET_BASE_REF: " in client.prompt
     assert "TARGET_BASE_SHA: " in client.prompt
     assert "TARGET_REFRESH: none" in client.prompt
+    assert "TARGET_WORKSPACE_PATH: /repos/dots" in client.prompt
     assert "RECOVERY_CONTEXT: Start a new deterministic session" in client.prompt
     assert client.cwd == Path("/repos/dots")
     assert client.settings is not None
@@ -129,19 +141,9 @@ def test_pi_runner_renders_normalized_task_context_with_typed_settings() -> None
     )
 
 
-def test_pi_runner_renders_isolated_checkout_contract() -> None:
-    client = FakePiClient()
-    runner = PiAutomationRunner(
-        client,
-        Path("/repos/dots"),
-        AutomationSkillRenderer(
-            _skill(),
-            AutomationPolicy(),
-            AutomationCheckout("isolated-worktree", "origin/main", "fetch"),
-            "abc123",
-        ),
-        PiRunnerConfig(skill="issue-implementation"),
-    )
+def test_pi_renderer_includes_isolated_checkout_contract() -> None:
+    checkout = AutomationCheckout("isolated-worktree", "origin/main", "fetch")
+    renderer = AutomationSkillRenderer(_skill(), AutomationPolicy(), checkout)
     task = AutomationTask(
         "github",
         "Fix it",
@@ -152,13 +154,24 @@ def test_pi_runner_renders_isolated_checkout_contract() -> None:
         "target/repo",
         contract=_contract(),
     )
+    settings = PiExecutionSettings(
+        session_id="session-id",
+        name="session-name",
+        timeout_seconds=7200,
+    )
 
-    runner.run(_admitted(task))
+    prompt = renderer.render(
+        _admitted(task),
+        False,
+        settings,
+        TargetWorkspace(Path("/workspaces/task"), "abc123"),
+    )
 
-    assert "TARGET_CHECKOUT_MODE: isolated-worktree" in client.prompt
-    assert "TARGET_BASE_REF: origin/main" in client.prompt
-    assert "TARGET_BASE_SHA: abc123" in client.prompt
-    assert "TARGET_REFRESH: fetch" in client.prompt
+    assert "TARGET_CHECKOUT_MODE: isolated-worktree" in prompt
+    assert "TARGET_BASE_REF: origin/main" in prompt
+    assert "TARGET_BASE_SHA: abc123" in prompt
+    assert "TARGET_REFRESH: fetch" in prompt
+    assert "TARGET_WORKSPACE_PATH: /workspaces/task" in prompt
 
 
 def test_same_repository_task_renders_short_closing_reference() -> None:

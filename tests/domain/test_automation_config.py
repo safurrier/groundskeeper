@@ -68,6 +68,7 @@ def test_parses_isolated_worktree_checkout_policy() -> None:
     ("checkout", "message"),
     [
         ({}, "checkout.mode"),
+        (None, "target.checkout must be a mapping"),
         ({"mode": "unknown"}, "checkout.mode"),
         ({"mode": "existing", "base-ref": "origin/main"}, "only valid"),
         ({"mode": "isolated-worktree"}, "checkout.base-ref"),
@@ -94,7 +95,7 @@ def test_parses_isolated_worktree_checkout_policy() -> None:
     ],
 )
 def test_rejects_invalid_checkout_policy(
-    checkout: dict[str, object], message: str
+    checkout: dict[str, object] | None, message: str
 ) -> None:
     config = _valid_automation_config()
     config["automations"]["daily"]["target"]["checkout"] = checkout  # type: ignore[index]
