@@ -600,6 +600,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#scheduled-local-automation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scheduled local automation
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -760,17 +771,41 @@ own Git checkout mechanics. The Pi adapter knows only how to execute a rendered
 prompt. <code>merge: never</code> is an accepted-result contract, not a credential sandbox.
 Host-state locking coordinates source admission and target workspaces on one
 machine and does not provide distributed locking.</p>
+<h3 id="scheduled-local-automation">Scheduled local automation<a class="headerlink" href="#scheduled-local-automation" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>host adapter (launchd, systemd, cron)
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>  → installed `gk automation ... run-scheduled`
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>  → acquire the named schedule lock
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>  → acquire the execution-source repository lock
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>  → optionally fetch the configured origin branch without touching donor files
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>  → resolve and pin one commit
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>  → create, advance, or validate one clean detached pinned worktree
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>  → resolve the repository-relative config and local skills inside that snapshot
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>  → validate every selected automation before quota state is opened
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>  → rotate selected automations and run bounded ticks under one daily ledger
+<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>  → emit one versioned JSON schedule result
+</code></pre></div>
+<p>The execution-source adapter owns Git refresh, commit resolution, and the
+bounded reusable configuration worktree. The scheduler application module owns
+lock ordering, repository-wide source-lease duration, preflight ordering, result
+aggregation, and daily reservation policy; its file-backed ledger adapter owns
+strict, locked persistence. Schedules using different refs from the same Git
+common directory serialize because fetch and worktree administration mutate
+shared repository state. The existing automation lifecycle continues to own
+tracker reconciliation and target task worktrees. A host adapter owns only
+calendar timing, environment/secrets, and runtime-specific executable wiring.
+The developer checkout is a donor for Git object access, not an execution
+directory or cleanliness authority.</p>
 <h2 id="ci-generation-flow">CI Generation Flow<a class="headerlink" href="#ci-generation-flow" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>config.yml → load_config() → get_workflows()
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>  → _parse_triggers() converts raw YAML into typed TriggerSpec tuple
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>  → _triggers_to_actions_yaml() converts back to GHA on: syntax
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>  → Templates receive is_pr_trigger flag for conditional rendering:
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>      PR triggers: draft check + PR-number concurrency group
-<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>      Schedule/manual: simple concurrency group, no draft check
-<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>  → Single-skill workflow: generate_caller() from caller.yml.j2
-<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>  → Multi-skill workflow: generate_chain_workflow() from chain.yml.j2
-<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>      Skills within a stage run in parallel (separate GHA jobs)
-<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>      Stages are sequential (each waits for the previous)
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>config.yml → load_config() → get_workflows()
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>  → _parse_triggers() converts raw YAML into typed TriggerSpec tuple
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>  → _triggers_to_actions_yaml() converts back to GHA on: syntax
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>  → Templates receive is_pr_trigger flag for conditional rendering:
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>      PR triggers: draft check + PR-number concurrency group
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>      Schedule/manual: simple concurrency group, no draft check
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>  → Single-skill workflow: generate_caller() from caller.yml.j2
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>  → Multi-skill workflow: generate_chain_workflow() from chain.yml.j2
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>      Skills within a stage run in parallel (separate GHA jobs)
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>      Stages are sequential (each waits for the previous)
 </code></pre></div>
 <p>Templates live in <code>groundskeeper/builtins/templates/github_actions/</code>.</p>
 

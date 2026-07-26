@@ -782,6 +782,14 @@
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>gk<span class="w"> </span>automation<span class="w"> </span>validate<span class="w"> </span><span class="o">[</span>NAME<span class="o">]</span><span class="w"> </span><span class="o">[</span>--json<span class="o">]</span>
 <a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>gk<span class="w"> </span>automation<span class="w"> </span>inspect<span class="w"> </span>NAME<span class="w"> </span><span class="o">[</span>--json<span class="o">]</span>
 <a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>gk<span class="w"> </span>automation<span class="w"> </span>tick<span class="w"> </span>NAME<span class="w"> </span><span class="o">[</span>--dry-run<span class="o">]</span><span class="w"> </span><span class="o">[</span>--json<span class="o">]</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>gk<span class="w"> </span>automation<span class="w"> </span>--config<span class="w"> </span>RELATIVE_PATH<span class="w"> </span>run-scheduled<span class="w"> </span><span class="o">[</span>NAME<span class="w"> </span>...<span class="o">]</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">  </span>--schedule-id<span class="w"> </span>ID<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">  </span>--source-repository-path<span class="w"> </span>PATH<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">  </span>--daily-attempt-limit<span class="w"> </span>N<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">  </span><span class="o">[</span>--source-ref<span class="w"> </span>origin/main<span class="o">]</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">  </span><span class="o">[</span>--source-refresh<span class="w"> </span>fetch<span class="p">|</span>none<span class="o">]</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">  </span><span class="o">[</span>--rotation<span class="w"> </span>daily<span class="p">|</span>fixed<span class="o">]</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">  </span><span class="o">[</span>--json<span class="o">]</span>
 </code></pre></div>
 <p><code>list</code> and <code>show</code> inspect configured local automations. <code>inspect</code> reads tracker
 items and reports Factory Task parsing, dependency resolution, and deterministic
@@ -817,6 +825,28 @@ profiles can substitute their profile wrapper, such as <code>pih</code>. Pi auto
 requires POSIX process-group isolation; validation and live ticks reject
 unsupported hosts before tracker access, issue claim, or worker startup rather
 than risk descendants surviving after lock release.</p>
+<p><code>run-scheduled</code> is the stable installed-CLI entry point for launchd, systemd,
+cron, or another host scheduler. Its <code>--config</code> path must be relative to the
+execution-source repository. Groundskeeper locks the source, optionally fetches
+the exact configured <code>origin/*</code> branch, resolves one commit, and materializes a
+clean detached snapshot under its host state directory. Configuration and local
+skills are loaded only from that pinned snapshot. The donor checkout
+may be on another branch or contain tracked and untracked changes; scheduled
+execution never checks, stashes, resets, checks out, cleans, or executes files
+from that working tree. External <code>--skill-path</code> directories and snapshot
+symlinks that resolve outside the snapshot are rejected.</p>
+<p>When no names are supplied, <code>run-scheduled</code> uses all automations in declaration
+order. <code>daily</code> rotation changes the first automation by local calendar day;
+<code>fixed</code> preserves declaration order. Groundskeeper reserves quota before every
+mutating tick and refunds only a proven <code>no-work</code> or <code>not-claimed</code> result, so a
+crash cannot fail open. The schedule ID owns a non-overlap lock and strict daily
+ledger under the Groundskeeper state root. Preflight validates the pinned
+config, skills, Pi, and target checkouts before opening that ledger. The JSON
+result includes the execution ref, pinned commit, managed workspace, quota
+state, and each tick result.</p>
+<p>The host adapter remains outside Groundskeeper: it chooses when to invoke the
+command and supplies secrets or a private Pi launcher. It should execute the
+installed <code>gk</code>, not a script from the donor repository.</p>
 <p>Pi runner configuration accepts optional <code>timeout-seconds</code> (default: 7,200) for
 long-running tasks. GitHub CLI calls use a fixed 30-second timeout. Groundskeeper
 does not sandbox a user-authorized Pi process; it enforces its accepted-result
