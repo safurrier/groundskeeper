@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import os
 from datetime import date
 from pathlib import Path
 from types import TracebackType
@@ -12,6 +13,30 @@ from typing import TextIO
 
 class SchedulerStateError(RuntimeError):
     """Scheduled automation state cannot be interpreted or persisted safely."""
+
+
+def _fsync_directory(path: Path) -> None:
+    """Persist directory entries created or replaced directly below path."""
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    directory_fd = os.open(path, directory_flags)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
+def _create_directory_chain_durably(path: Path) -> None:
+    """Create missing directories and persist each new parent entry."""
+    missing: list[Path] = []
+    current = path
+    while not current.exists():
+        missing.append(current)
+        if current == current.parent:
+            break
+        current = current.parent
+    for directory in reversed(missing):
+        directory.mkdir(exist_ok=True)
+        _fsync_directory(directory.parent)
 
 
 class DailyQuotaLedger:
@@ -28,7 +53,7 @@ class DailyQuotaLedger:
 
     def __enter__(self) -> DailyQuotaLedger:
         try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
+            _create_directory_chain_durably(self.path.parent)
             lock_path = self.path.with_suffix(self.path.suffix + ".lock")
             self._lock_file = lock_path.open("a+", encoding="utf-8")
             fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_EX)
@@ -108,11 +133,16 @@ class DailyQuotaLedger:
 
     def _persist(self) -> None:
         temporary = self.path.with_suffix(self.path.suffix + ".tmp")
+        payload = json.dumps(
+            {"date": self.day.isoformat(), "consumed": self.consumed}
+        ).encode()
         try:
-            temporary.write_text(
-                json.dumps({"date": self.day.isoformat(), "consumed": self.consumed})
-            )
-            temporary.replace(self.path)
+            with temporary.open("wb") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, self.path)
+            _fsync_directory(self.path.parent)
         except OSError as error:
             raise SchedulerStateError(
                 f"cannot safely persist daily quota ledger {self.path}: {error}"

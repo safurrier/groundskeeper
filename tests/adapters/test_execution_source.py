@@ -141,3 +141,21 @@ def test_execution_tree_rejects_symlink_outside_snapshot(tmp_path: Path) -> None
 
     with pytest.raises(ExecutionSourceError, match="must remain inside"):
         validate_execution_tree(snapshot, skills)
+
+
+def test_execution_tree_rejects_escape_below_internal_directory_symlink(
+    tmp_path: Path,
+) -> None:
+    snapshot = tmp_path / "snapshot"
+    skills = snapshot / ".groundskeeper/skills"
+    internal = snapshot / "shared"
+    external = tmp_path / "mutable-skill"
+    skills.mkdir(parents=True)
+    internal.mkdir()
+    external.mkdir()
+    (skills / "linked").symlink_to(internal, target_is_directory=True)
+    (internal / "nested").symlink_to(external, target_is_directory=True)
+    (external / "SKILL.md").write_text("---\nname: escaped\n---\n")
+
+    with pytest.raises(ExecutionSourceError, match="must remain inside"):
+        validate_execution_tree(snapshot, skills)

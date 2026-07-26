@@ -1,5 +1,6 @@
 from datetime import date
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -118,3 +119,57 @@ def test_state_path_failure_is_translated(tmp_path: Path) -> None:
     with pytest.raises(SchedulerStateError):
         with DailyQuotaLedger(parent_file / "daily-quota.json", date(2026, 7, 26), 1):
             pass
+
+
+def test_quota_persist_fsyncs_file_before_replace_and_directory_after(
+    tmp_path: Path,
+) -> None:
+    events: list[str] = []
+    path = tmp_path / "quota.json"
+
+    from groundskeeper.adapters import scheduler_state
+
+    real_replace = scheduler_state.os.replace
+    with (
+        patch.object(
+            scheduler_state.os,
+            "fsync",
+            side_effect=lambda _fd: events.append("fsync"),
+        ),
+        patch.object(
+            scheduler_state.os,
+            "replace",
+            side_effect=lambda source, destination: (
+                events.append("replace"),
+                real_replace(source, destination),
+            )[-1],
+        ),
+    ):
+        with DailyQuotaLedger(path, date(2026, 7, 26), 1):
+            pass
+
+    assert events == ["fsync", "replace", "fsync"]
+
+
+def test_first_quota_directory_chain_is_persisted_in_each_parent(
+    tmp_path: Path,
+) -> None:
+    directories: list[Path] = []
+    path = tmp_path / "state" / "schedules" / "daily" / "quota.json"
+
+    from groundskeeper.adapters import scheduler_state
+
+    with patch.object(
+        scheduler_state,
+        "_fsync_directory",
+        side_effect=lambda directory: directories.append(directory),
+    ):
+        with DailyQuotaLedger(path, date(2026, 7, 26), 1):
+            pass
+
+    assert directories == [
+        tmp_path,
+        tmp_path / "state",
+        tmp_path / "state" / "schedules",
+        tmp_path / "state" / "schedules" / "daily",
+    ]

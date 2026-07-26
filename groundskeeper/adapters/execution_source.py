@@ -41,10 +41,17 @@ def resolve_execution_path(snapshot: Path, configured: Path) -> Path:
 def validate_execution_tree(snapshot: Path, tree: Path) -> None:
     """Reject symlinks that let scheduled inputs escape their Git snapshot."""
     if not tree.exists():
+        if tree.is_symlink():
+            raise ExecutionSourceError(
+                "scheduled input cannot be resolved inside its execution snapshot: "
+                f"{tree}"
+            )
         return
     resolved_snapshot = snapshot.resolve()
-    candidates = [tree, *tree.rglob("*")]
-    for candidate in candidates:
+    pending = [tree]
+    visited_directories: set[Path] = set()
+    while pending:
+        candidate = pending.pop()
         try:
             resolved = candidate.resolve(strict=True)
         except OSError as error:
@@ -57,6 +64,16 @@ def validate_execution_tree(snapshot: Path, tree: Path) -> None:
                 "scheduled inputs must remain inside their execution snapshot: "
                 f"{candidate}"
             )
+        if not resolved.is_dir() or resolved in visited_directories:
+            continue
+        visited_directories.add(resolved)
+        try:
+            pending.extend(resolved.iterdir())
+        except OSError as error:
+            raise ExecutionSourceError(
+                "scheduled input cannot be traversed inside its execution snapshot: "
+                f"{candidate}"
+            ) from error
 
 
 class ExecutionSourceManager:
