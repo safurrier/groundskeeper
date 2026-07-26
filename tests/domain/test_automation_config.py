@@ -64,6 +64,21 @@ def test_parses_isolated_worktree_checkout_policy() -> None:
     assert checkout.refresh == "fetch"
 
 
+def test_parses_managed_worktree_checkout_policy() -> None:
+    config = _valid_automation_config()
+    config["automations"]["daily"]["target"]["checkout"] = {  # type: ignore[index]
+        "mode": "managed-worktree",
+        "base-ref": "origin/main",
+        "refresh": "fetch",
+    }
+
+    checkout = get_automations(config)[0].target.checkout
+
+    assert checkout.mode == "managed-worktree"
+    assert checkout.base_ref == "origin/main"
+    assert checkout.refresh == "fetch"
+
+
 @pytest.mark.parametrize(
     ("checkout", "message"),
     [
@@ -72,6 +87,21 @@ def test_parses_isolated_worktree_checkout_policy() -> None:
         ({"mode": "unknown"}, "checkout.mode"),
         ({"mode": "existing", "base-ref": "origin/main"}, "only valid"),
         ({"mode": "isolated-worktree"}, "checkout.base-ref"),
+        *[
+            (
+                {"mode": "managed-worktree", "base-ref": base_ref},
+                "stable named base-ref",
+            )
+            for base_ref in (
+                "HEAD",
+                "@",
+                "HEAD~0",
+                "HEAD^0",
+                "@{-1}",
+                "groundskeeper/task-old",
+                "refs/heads/groundskeeper/task-old",
+            )
+        ],
         (
             {"mode": "isolated-worktree", "base-ref": "main", "refresh": "fetch"},
             "origin/",

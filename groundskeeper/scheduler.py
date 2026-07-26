@@ -34,6 +34,7 @@ class ScheduledTick:
     detail: str | None = None
     pull_request_url: str | None = None
     consumed_attempt: bool = False
+    operator_detail: str | None = None
 
 
 @dataclass(frozen=True)

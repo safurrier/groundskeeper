@@ -8,7 +8,7 @@ from typing import Protocol
 
 from groundskeeper.adapters.pi import PiExecutionSettings
 from groundskeeper.adapters.target_checkout import (
-    TargetCheckoutManager,
+    TargetCheckoutError,
     TargetWorkspace,
 )
 from groundskeeper.domain.automation import (
@@ -32,6 +32,13 @@ class PiPromptExecutor(Protocol):
     def run_prompt(
         self, prompt: str, cwd: Path, settings: PiExecutionSettings
     ) -> WorkResult: ...
+
+
+class TargetWorkspaceProvider(Protocol):
+    """Prepare the deterministic workspace for one admitted task."""
+
+    def readiness_for(self, task: AutomationTask) -> str | None: ...
+    def workspace_for(self, task: AutomationTask) -> TargetWorkspace: ...
 
 
 class AutomationSkillRenderer:
@@ -112,7 +119,7 @@ class PiAutomationRunner:
     def __init__(
         self,
         client: PiPromptExecutor,
-        checkout_manager: TargetCheckoutManager,
+        checkout_manager: TargetWorkspaceProvider,
         renderer: AutomationSkillRenderer,
         config: PiRunnerConfig,
     ) -> None:
@@ -144,9 +151,21 @@ class PiAutomationRunner:
             f"pi --session {settings.session_id}",
         )
 
+    def readiness(self, task: AutomationTask) -> str | None:
+        """Return a nonmutating checkout blocker before tracker claim."""
+        return self._checkout_manager.readiness_for(task)
+
     def run(self, task: AdmittedTask, recovery: bool = False) -> WorkResult:
         settings = self._settings(task.task)
-        workspace = self._checkout_manager.workspace_for(task.task)
+        try:
+            workspace = self._checkout_manager.workspace_for(task.task)
+        except TargetCheckoutError as error:
+            return WorkResult(
+                False,
+                error=str(error),
+                exit_code=2,
+                public_detail="Target workspace preparation failed before worker launch",
+            )
         return self._client.run_prompt(
             self._renderer.render(task, recovery, settings, workspace),
             workspace.path,

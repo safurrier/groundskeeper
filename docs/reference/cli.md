@@ -48,22 +48,28 @@ source and target separately while dry-run continues to omit issue bodies.
 `validate` checks strict config, named-skill resolution, Pi availability, the
 fixed draft-only/never-merge policy, and that the target path is a Git worktree
 whose `origin` identifies `target.repository`, without contacting GitHub or
-starting work. For `isolated-worktree` targets it also resolves the configured
-base ref. Dry-run performs the same read-only checkout preflight. A live tick
-with `refresh: fetch` fetches the configured `origin/*` branch under the host
-lock and freezes its resolved commit SHA before tracker access. After claim it
-creates or reuses the deterministic task worktree and starts Pi there. Recovery
-retains the original task base even when the configured ref advances. Neither
-path checks or modifies donor working-tree files. `tick` runs one bounded reconciliation pass. Dry-run
+starting work. For `isolated-worktree` and `managed-worktree` targets it also
+resolves the configured base ref. A managed target must be a linked disposable
+worktree and is reused directly; dirty state is accepted only on a
+Groundskeeper task branch so the same task can resume. Dry-run performs the same
+read-only checkout preflight. A live tick with `refresh: fetch` fetches the
+configured `origin/*` branch under the host lock and freezes its resolved commit
+SHA before tracker access. After claim it creates or reuses the deterministic
+task branch and starts Pi there. Recovery retains the original task base even
+when the configured ref advances. `tick` runs one bounded reconciliation pass. Dry-run
 selects and reports eligible work without labels, comments, or worker launch.
 Invalid, tracking, missing-contract, or unresolved-dependency work reports
 `would-block` in dry-run and transitions to blocked only in a live tick.
+`would-wait` means a managed worktree contains uncommitted work for another task;
+the live tick leaves the selected task unclaimed and reports `not-claimed`.
 Its compact output omits issue bodies. Pi child output is streamed to stderr so
 scheduler logs show progress without corrupting JSON stdout. Review, deferred,
 and blocked results expose `session_id`, `session_name`, and `resume_command` in
 the JSON `data` object. A blocked result may also contain a strict, bounded
 public summary/next-action marker emitted by the automation skill; unmarked Pi
-stdout remains local and the generic blocker text is the safe fallback. A
+stdout remains local and the generic blocker text is the safe fallback. Local
+checkout failures additionally expose `operator_detail` in JSON while keeping
+the issue comment generic. A
 deferred result means Pi reported an explicit transient
 provider exhaustion signal and the deterministic session will be reclaimed on a
 later tick. The generic resume command uses `pi`; callers with auth

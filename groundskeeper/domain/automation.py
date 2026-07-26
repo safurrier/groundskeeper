@@ -181,3 +181,4 @@ class TickResult:
     session_id: str | None = None
     session_name: str | None = None
     resume_command: str | None = None
+    operator_detail: str | None = None

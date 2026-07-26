@@ -23,6 +23,7 @@ from groundskeeper.domain.triggers import (
 # Tools that can modify the working directory.
 WRITE_TOOLS = frozenset({"Write", "Edit", "Bash", "NotebookEdit"})
 _AUTOMATION_NAME_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
+_COMMIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 DEFAULT_PI_TIMEOUT_SECONDS = 7200
 
 
@@ -144,7 +145,7 @@ class GitHubIssuesSource:
 class AutomationCheckout:
     """Typed checkout preparation contract for an automation target."""
 
-    mode: Literal["existing", "isolated-worktree"] = "existing"
+    mode: Literal["existing", "isolated-worktree", "managed-worktree"] = "existing"
     base_ref: str | None = None
     refresh: Literal["none", "fetch"] = "none"
 
@@ -232,16 +233,16 @@ def _parse_automation_checkout(raw: object, entry_path: str) -> AutomationChecko
         f"{entry_path}.target.checkout",
     )
     mode = checkout.get("mode")
-    if mode not in {"existing", "isolated-worktree"}:
+    if mode not in {"existing", "isolated-worktree", "managed-worktree"}:
         raise ConfigError(
             f"Automation '{entry_path.removeprefix('automations.')}' "
-            "target.checkout.mode must be existing or isolated-worktree"
+            "target.checkout.mode must be existing, isolated-worktree, or managed-worktree"
         )
     if mode == "existing":
         if set(checkout) != {"mode"}:
             raise ConfigError(
                 "target.checkout base-ref and refresh are only valid for "
-                "mode: isolated-worktree"
+                "mode: isolated-worktree or managed-worktree"
             )
         return AutomationCheckout()
 
@@ -255,6 +256,11 @@ def _parse_automation_checkout(raw: object, entry_path: str) -> AutomationChecko
         raise ConfigError(
             f"Automation '{entry_path.removeprefix('automations.')}' "
             "requires non-empty target.checkout.base-ref"
+        )
+    if mode == "managed-worktree" and not _is_stable_managed_base_ref(base_ref):
+        raise ConfigError(
+            "target.checkout.mode: managed-worktree requires a stable named "
+            "base-ref or full commit SHA"
         )
     refresh = checkout.get("refresh", "none")
     if refresh not in {"none", "fetch"}:
@@ -277,9 +283,33 @@ def _parse_automation_checkout(raw: object, entry_path: str) -> AutomationChecko
                 "target.checkout.refresh: fetch requires base-ref under origin/"
             )
     return AutomationCheckout(
-        mode="isolated-worktree",
+        mode=cast(Literal["isolated-worktree", "managed-worktree"], mode),
         base_ref=base_ref,
         refresh=cast(Literal["none", "fetch"], refresh),
+    )
+
+
+def _is_stable_managed_base_ref(value: str) -> bool:
+    """Reject checkout-relative revision expressions and task-owned refs."""
+    if _COMMIT_SHA_RE.fullmatch(value):
+        return True
+    if value in {"HEAD", "@"} or value.startswith("groundskeeper/task-"):
+        return False
+    if value.startswith("refs/heads/groundskeeper/task-"):
+        return False
+    if (
+        value.startswith("/")
+        or value.endswith(("/", "."))
+        or ".." in value
+        or "@{" in value
+        or "//" in value
+        or any(char in " ~^:?*[\\" for char in value)
+    ):
+        return False
+    parts = value.split("/")
+    return all(
+        part and not part.startswith(".") and not part.endswith(".lock")
+        for part in parts
     )
 
 

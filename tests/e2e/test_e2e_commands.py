@@ -230,6 +230,8 @@ def _deferred_factory_repo(tmp_path: Path) -> tuple[Path, dict[str, str], Path, 
         'echo \'running->deferred\' >> "$LOG"; echo deferred > "$STATE" ;;\n'
         '  *"issue edit"*"factory:running"*"factory:review"*) '
         'echo \'running->review\' >> "$LOG"; echo review > "$STATE" ;;\n'
+        '  *"issue edit"*"factory:running"*"factory:blocked"*) '
+        'echo \'running->blocked\' >> "$LOG"; echo blocked > "$STATE" ;;\n'
         '  *"issue comment"*) echo \'comment\' >> "$LOG" ;;\n'
         f"  *\"api graphql\"*) if [ -f '{pr_created}' ]; then "
         f"printf '%s' '{pull_requests}'; "
@@ -541,6 +543,166 @@ class TestAutomationE2E:
         )
         assert (repo / "tracked.txt").read_text() == "donor base\n"
         assert (repo / "unrelated.txt").read_text() == "preserve me\n"
+
+    def test_live_tick_reuses_managed_linked_worktree_through_real_process(
+        self, tmp_path: Path
+    ) -> None:
+        repo, env, gh_log, pi_log = _deferred_factory_repo(tmp_path)
+        managed = tmp_path / "managed"
+        state_home = tmp_path / "state"
+        env["GROUNDSKEEPER_STATE_HOME"] = str(state_home)
+        subprocess.run(["git", "switch", "-q", "-c", "main"], cwd=repo, check=True)
+        config_path = repo / ".groundskeeper/config.yml"
+        config = yaml.safe_load(config_path.read_text())
+        config["automations"]["daily"]["target"]["repository-path"] = str(managed)
+        config["automations"]["daily"]["target"]["checkout"] = {
+            "mode": "managed-worktree",
+            "base-ref": "origin/main",
+            "refresh": "none",
+        }
+        config_path.write_text(yaml.safe_dump(config, sort_keys=False))
+        subprocess.run(["git", "add", "."], cwd=repo, check=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=Groundskeeper Test",
+                "-c",
+                "user.email=groundskeeper@example.com",
+                "commit",
+                "-qm",
+                "factory config",
+            ],
+            cwd=repo,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "update-ref", "refs/remotes/origin/main", "HEAD"],
+            cwd=repo,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "worktree", "add", "-q", "--detach", managed, "HEAD"],
+            cwd=repo,
+            check=True,
+        )
+
+        first = run_gk("automation", "tick", "daily", "--json", cwd=managed, env=env)
+        second = run_gk("automation", "tick", "daily", "--json", cwd=managed, env=env)
+        third = run_gk("automation", "tick", "daily", "--json", cwd=managed, env=env)
+
+        assert first.returncode == second.returncode == third.returncode == 0
+        assert [
+            json.loads(first.stdout)["status"],
+            json.loads(second.stdout)["status"],
+            json.loads(third.stdout)["status"],
+        ] == ["deferred", "deferred", "review"]
+        pi_calls = pi_log.read_text().splitlines()
+        assert {line for line in pi_calls if line.startswith("cwd=")} == {
+            f"cwd={managed}"
+        }
+        assert "\n".join(pi_calls).count("TARGET_CHECKOUT_MODE: managed-worktree") == 3
+        assert not (state_home / "groundskeeper" / "worktrees").exists()
+        branch = subprocess.run(
+            ["git", "branch", "--show-current"],
+            cwd=managed,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        assert branch.startswith("groundskeeper/task-")
+
+        wip = managed / "wip.txt"
+        wip.write_text("task seven work\n")
+        (tmp_path / "issue-state").write_text("ready")
+        (tmp_path / "pr-created").unlink()
+        gh = tmp_path / "bin/gh"
+        gh.write_text(
+            gh.read_text()
+            .replace('"number": 7', '"number": 8')
+            .replace("/issues/7", "/issues/8")
+        )
+        transitions_before = gh_log.read_text()
+
+        waiting = run_gk("automation", "tick", "daily", "--json", cwd=managed, env=env)
+
+        waiting_payload = json.loads(waiting.stdout)
+        assert waiting.returncode == 4
+        assert waiting_payload["status"] == "not-claimed"
+        assert (
+            "uncommitted work for another task"
+            in waiting_payload["data"]["operator_detail"]
+        )
+        assert gh_log.read_text() == transitions_before
+        assert wip.read_text() == "task seven work\n"
+
+    def test_post_claim_checkout_failure_blocks_with_operator_diagnostic(
+        self, tmp_path: Path
+    ) -> None:
+        repo, env, gh_log, _ = _deferred_factory_repo(tmp_path)
+        managed = tmp_path / "managed"
+        subprocess.run(["git", "switch", "-q", "-c", "main"], cwd=repo, check=True)
+        config_path = repo / ".groundskeeper/config.yml"
+        config = yaml.safe_load(config_path.read_text())
+        config["automations"]["daily"]["target"]["repository-path"] = str(managed)
+        config["automations"]["daily"]["target"]["checkout"] = {
+            "mode": "managed-worktree",
+            "base-ref": "origin/main",
+            "refresh": "none",
+        }
+        config_path.write_text(yaml.safe_dump(config, sort_keys=False))
+        subprocess.run(["git", "add", "."], cwd=repo, check=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=Groundskeeper Test",
+                "-c",
+                "user.email=groundskeeper@example.com",
+                "commit",
+                "-qm",
+                "factory config",
+            ],
+            cwd=repo,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "update-ref", "refs/remotes/origin/main", "HEAD"],
+            cwd=repo,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "worktree", "add", "-q", "--detach", managed, "HEAD"],
+            cwd=repo,
+            check=True,
+        )
+        real_git = shutil.which("git")
+        assert real_git is not None
+        git_wrapper = tmp_path / "bin/git"
+        git_wrapper.write_text(
+            "#!/bin/sh\n"
+            'case "$*" in\n'
+            '  "switch --create groundskeeper/task-"*) '
+            "echo 'injected checkout failure' >&2; exit 1 ;;\n"
+            f"  *) exec '{real_git}' \"$@\" ;;\n"
+            "esac\n"
+        )
+        git_wrapper.chmod(0o755)
+
+        result = run_gk("automation", "tick", "daily", "--json", cwd=managed, env=env)
+
+        payload = json.loads(result.stdout)
+        assert result.returncode == 5
+        assert payload["status"] == "blocked"
+        assert (
+            payload["data"]["detail"]
+            == "Target workspace preparation failed before worker launch"
+        )
+        assert "injected checkout failure" in payload["data"]["operator_detail"]
+        assert gh_log.read_text().splitlines()[:2] == [
+            "ready->running",
+            "running->blocked",
+        ]
 
     def test_scheduled_run_uses_origin_snapshot_and_preserves_dirty_source(
         self, tmp_path: Path
