@@ -141,11 +141,21 @@ class GitHubIssuesSource:
 
 
 @dataclass(frozen=True)
+class AutomationCheckout:
+    """Typed checkout preparation contract for an automation target."""
+
+    mode: Literal["existing", "isolated-worktree"] = "existing"
+    base_ref: str | None = None
+    refresh: Literal["none", "fetch"] = "none"
+
+
+@dataclass(frozen=True)
 class AutomationTarget:
-    """Repository and checkout where the implementation worker runs."""
+    """Repository and donor checkout where the implementation worker starts."""
 
     repository: str
     repository_path: Path
+    checkout: AutomationCheckout = field(default_factory=AutomationCheckout)
 
 
 @dataclass(frozen=True)
@@ -211,6 +221,68 @@ def _parse_skill_ref(entry: Any) -> SkillRef | None:
             allowed_tools=[str(t) for t in tools],
         )
     return None
+
+
+def _parse_automation_checkout(raw: object, entry_path: str) -> AutomationCheckout:
+    """Parse the optional strict target checkout policy."""
+    if raw is None:
+        return AutomationCheckout()
+    checkout = _automation_mapping(raw, f"{entry_path}.target.checkout")
+    _reject_unknown_automation_keys(
+        checkout,
+        {"mode", "base-ref", "refresh"},
+        f"{entry_path}.target.checkout",
+    )
+    mode = checkout.get("mode")
+    if mode not in {"existing", "isolated-worktree"}:
+        raise ConfigError(
+            f"Automation '{entry_path.removeprefix('automations.')}' "
+            "target.checkout.mode must be existing or isolated-worktree"
+        )
+    if mode == "existing":
+        if set(checkout) != {"mode"}:
+            raise ConfigError(
+                "target.checkout base-ref and refresh are only valid for "
+                "mode: isolated-worktree"
+            )
+        return AutomationCheckout()
+
+    base_ref = checkout.get("base-ref")
+    if (
+        not isinstance(base_ref, str)
+        or not base_ref
+        or base_ref.startswith("-")
+        or any(char.isspace() or ord(char) < 32 for char in base_ref)
+    ):
+        raise ConfigError(
+            f"Automation '{entry_path.removeprefix('automations.')}' "
+            "requires non-empty target.checkout.base-ref"
+        )
+    refresh = checkout.get("refresh", "none")
+    if refresh not in {"none", "fetch"}:
+        raise ConfigError(
+            f"Automation '{entry_path.removeprefix('automations.')}' "
+            "target.checkout.refresh must be none or fetch"
+        )
+    if refresh == "fetch":
+        branch = base_ref.removeprefix("origin/")
+        if (
+            branch == base_ref
+            or not branch
+            or branch.startswith("-")
+            or branch.endswith("/")
+            or ".." in branch
+            or "@{" in branch
+            or any(char in "~^:?*[\\" for char in branch)
+        ):
+            raise ConfigError(
+                "target.checkout.refresh: fetch requires base-ref under origin/"
+            )
+    return AutomationCheckout(
+        mode="isolated-worktree",
+        base_ref=base_ref,
+        refresh=cast(Literal["none", "fetch"], refresh),
+    )
 
 
 def _parse_steps(raw_skills: list[Any]) -> list[Step]:
@@ -387,9 +459,10 @@ def get_automations(config: Mapping[str, object]) -> list[Automation]:
         target = _automation_mapping(target, f"{entry_path}.target")
         _reject_unknown_automation_keys(
             target,
-            {"repository", "repository-path"},
+            {"repository", "repository-path", "checkout"},
             f"{entry_path}.target",
         )
+        checkout = _parse_automation_checkout(target.get("checkout"), entry_path)
         if not isinstance(runner, dict):
             raise ConfigError(f"Automation '{name}' requires runner.type: pi")
         runner = _automation_mapping(runner, f"{entry_path}.runner")
@@ -507,6 +580,7 @@ def get_automations(config: Mapping[str, object]) -> list[Automation]:
                 target=AutomationTarget(
                     repository=target_repository,
                     repository_path=path.resolve(),
+                    checkout=checkout,
                 ),
                 runner=PiRunnerConfig(skill=skill, timeout_seconds=timeout_seconds),
                 policy=AutomationPolicy(),

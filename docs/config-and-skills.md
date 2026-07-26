@@ -26,7 +26,9 @@ A Pi runner must explicitly name `skill`, use `approval: allow`, and use
 identities. The source requires `repository` and at least one `trusted-author`;
 the target requires `repository` and an absolute `repository-path`. Validation,
 dry-run, and live tick prove that path is a Git worktree whose `origin` GitHub
-HTTPS or SSH remote matches the configured target before tracker access. Safety
+HTTPS or SSH remote matches the configured target before tracker access. An
+optional strict `target.checkout` block selects an existing checkout or an
+isolated-worktree donor contract. Safety
 policy is strict: concurrency is `1`, output is `draft-pr`, and merge is `never`.
 Groundskeeper validates this policy and enforces the accepted-result
 postcondition: only an open draft pull request in the target repository that
@@ -34,7 +36,9 @@ closes the exact repository-qualified source issue reaches review. It does not
 sandbox a user-authorized Pi process. An automation skill receives normalized
 `TASK_ID`, `TASK_TITLE`, `TASK_BODY`, `TASK_URL`, target `REPOSITORY`, typed
 `FACTORY_CLOSING_REFERENCE`, `RECOVERY_CONTEXT`, and `POLICY_CONCURRENCY`,
-`POLICY_OUTPUT`, and `POLICY_MERGE`; ordinary skill rendering is unchanged.
+`POLICY_OUTPUT`, and `POLICY_MERGE`; checkout-aware workers also receive
+`TARGET_CHECKOUT_MODE`, `TARGET_BASE_REF`, `TARGET_BASE_SHA`, and
+`TARGET_REFRESH`. Ordinary skill rendering is unchanged.
 
 Every GitHub Issues automation task must begin with exactly these first two H2
 sections. The contract sections cannot contain comments or fenced examples:
@@ -79,7 +83,21 @@ source:
 target:
   repository: example/widgets
   repository-path: /srv/widgets
+  checkout:
+    mode: isolated-worktree
+    base-ref: origin/main
+    refresh: fetch
 ```
+
+When `checkout` is omitted, `mode: existing` preserves the original behavior
+and Pi runs in `repository-path`. `mode: isolated-worktree` requires an explicit
+`base-ref`. `refresh: none` resolves the locally available ref without network
+mutation. `refresh: fetch` requires an `origin/*` base and, for a live tick only,
+fetches that exact branch under the repository lock before tracker access.
+Groundskeeper then passes the resolved commit as `TARGET_BASE_SHA`; the skill
+owns task-worktree creation and reuse. Groundskeeper never checks, cleans,
+stashes, resets, checks out, or edits the donor working tree. Fetch failure or
+an unresolved base stops before issue claim or worker launch.
 
 Pi runners accept optional positive `timeout-seconds` (default: `7200`) for
 long-running development work. GitHub CLI operations use a fixed 30-second

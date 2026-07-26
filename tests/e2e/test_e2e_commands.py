@@ -324,6 +324,54 @@ class TestAutomationE2E:
         assert validated_automation["target"]["repository"] == "target/repo"
         assert json.loads(validated.stdout)["version"] == 2
 
+    def test_validate_resolves_isolated_checkout_base_through_real_process(
+        self, tmp_path: Path
+    ) -> None:
+        repo, env = _factory_repo(tmp_path, "[]")
+        (repo / "tracked.txt").write_text("base\n")
+        subprocess.run(["git", "add", "tracked.txt"], cwd=repo, check=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=Groundskeeper Test",
+                "-c",
+                "user.email=groundskeeper@example.com",
+                "commit",
+                "-qm",
+                "base",
+            ],
+            cwd=repo,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "update-ref", "refs/remotes/origin/main", "HEAD"],
+            cwd=repo,
+            check=True,
+        )
+        config_path = repo / ".groundskeeper/config.yml"
+        config = yaml.safe_load(config_path.read_text())
+        config["automations"]["daily"]["target"]["checkout"] = {
+            "mode": "isolated-worktree",
+            "base-ref": "origin/main",
+            "refresh": "none",
+        }
+        config_path.write_text(yaml.safe_dump(config, sort_keys=False))
+
+        validated = run_gk(
+            "automation", "validate", "daily", "--json", cwd=repo, env=env
+        )
+
+        assert validated.returncode == 0
+        checkout = json.loads(validated.stdout)["data"]["automations"][0]["target"][
+            "checkout"
+        ]
+        assert checkout == {
+            "mode": "isolated-worktree",
+            "base_ref": "origin/main",
+            "refresh": "none",
+        }
+
     def test_dry_run_is_compact_and_does_not_launch_pi_or_write_state(
         self, tmp_path: Path
     ) -> None:

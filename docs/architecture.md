@@ -79,16 +79,17 @@ For workflows: steps execute sequentially. `ParallelGroup` steps use `ThreadPool
 
 ```text
 automation config
-  → strict source queue, target repository/path, runner, labels, timeout, and policy parsing
+  → strict source queue, target repository/path/checkout, runner, labels, timeout, and policy parsing
   → resolve configured skill with provenance
-  → prove target path is a Git worktree whose origin matches target repository
-  → acquire stable host-state lock for canonical source repository identity
+  → validation/dry-run: prove target identity and resolve the optional base without donor mutation
+  → live tick: acquire the stable host-state lock for canonical source repository identity
+  → live tick: prove target identity, optionally fetch the exact origin branch, and freeze its commit SHA
   → reconcile running issues before deferred work before ready work
   → parse one exact Factory Task + Dependencies contract and resolve dependency state
   → block malformed, tracking, inaccessible, unresolved, or closed-unmerged dependency work before Pi
   → atomically claim at most one admitted trusted deferred or ready task
   → normalize the repository-qualified source issue and explicit target identity
-  → render configured skill + typed closing/task-contract/recovery/policy/session context
+  → render configured skill + typed closing/task-contract/checkout/recovery/policy/session context
   → require POSIX process-group isolation
   → run Pi in the target checkout with a deterministic session keyed by source + issue + target
       stdout + stderr → separately preserved and tee'd to live scheduler logs
@@ -120,8 +121,9 @@ session. A repeat transient failure returns it to `deferred`; a later accepted
 draft PR reaches `review`.
 
 The source repository owns discovery, admission, dependencies, labels, comments,
-and lifecycle. The target repository/path owns Pi cwd, rendered `REPOSITORY`,
-and accepted draft PR discovery. The workflow instructions belong to the
+and lifecycle. The target repository/path/checkout contract owns Pi cwd,
+rendered `REPOSITORY`, immutable task-worktree base identity, and accepted draft
+PR discovery. The workflow instructions belong to the
 configured skill; the Pi adapter knows only how to execute a rendered prompt. `merge: never` is an accepted-result
 contract, not a credential sandbox. Host-state locking coordinates config
 worktrees on one machine and does not provide distributed locking.

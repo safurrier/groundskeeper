@@ -40,8 +40,11 @@ source and target separately while dry-run continues to omit issue bodies.
 `validate` checks strict config, named-skill resolution, Pi availability, the
 fixed draft-only/never-merge policy, and that the target path is a Git worktree
 whose `origin` identifies `target.repository`, without contacting GitHub or
-starting work. Dry-run and live tick perform the same checkout-identity
-preflight before tracker access. `tick` runs one bounded reconciliation pass. Dry-run
+starting work. For `isolated-worktree` targets it also resolves the configured
+base ref. Dry-run performs the same read-only checkout preflight. A live tick
+with `refresh: fetch` fetches the configured `origin/*` branch under the host
+lock and passes its resolved commit SHA to the skill before tracker access.
+Neither path checks or modifies donor working-tree files. `tick` runs one bounded reconciliation pass. Dry-run
 selects and reports eligible work without labels, comments, or worker launch.
 Invalid, tracking, missing-contract, or unresolved-dependency work reports
 `would-block` in dry-run and transitions to blocked only in a live tick.

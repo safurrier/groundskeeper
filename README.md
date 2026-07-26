@@ -29,6 +29,10 @@ automations:
     target:
       repository: example/widgets
       repository-path: /Users/you/src/widgets
+      checkout:
+        mode: isolated-worktree
+        base-ref: origin/main
+        refresh: fetch
     runner:
       type: pi
       skill: issue-implementation
@@ -44,7 +48,8 @@ automations:
 Create `issue-implementation` as an ordinary skill under
 `.groundskeeper/skills/`. It receives its usual prompt plus `TASK_ID`,
 `TASK_TITLE`, `TASK_BODY`, `TASK_URL`, `REPOSITORY`,
-`FACTORY_CLOSING_REFERENCE`, `RECOVERY_CONTEXT`, and the fixed
+`FACTORY_CLOSING_REFERENCE`, `RECOVERY_CONTEXT`, typed `TARGET_CHECKOUT_MODE`,
+`TARGET_BASE_REF`, `TARGET_BASE_SHA`, `TARGET_REFRESH`, and the fixed
 `POLICY_CONCURRENCY`, `POLICY_OUTPUT`, and `POLICY_MERGE` fields. `REPOSITORY`
 is the target repository. The closing reference is `#123` for a same-repository
 queue or `example/work-factory#123` for a cross-repository queue.
@@ -59,8 +64,14 @@ gk automation tick daily-maintenance --json
 
 `validate` checks configuration, skill resolution, the Pi executable, fixed
 policy, and that the target path is a Git worktree whose GitHub `origin` matches
-the configured target, without contacting GitHub or claiming work. Dry-run and
-live tick perform that checkout preflight before tracker access. Source issue
+the configured target, without contacting GitHub or claiming work. For an
+`isolated-worktree` target it also resolves the configured base ref. A live tick
+with `refresh: fetch` refreshes the exact `origin/*` branch under the host lock,
+then passes its immutable commit SHA to the worker before tracker access.
+Validation and dry-run never fetch. The target path is a donor checkout; its
+dirty working tree is neither inspected nor modified by Groundskeeper. The
+configured skill must create or reuse its isolated task worktree from
+`TARGET_BASE_SHA`. Source issue
 discovery, admission, labels, dependencies, and comments stay in the source
 repository. Pi runs in the target path. Pull-request reconciliation queries the
 exact source issue's closing-PR connection and filters results to the target

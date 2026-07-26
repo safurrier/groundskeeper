@@ -21,7 +21,11 @@ from groundskeeper.domain.config import get_automations
 def _accept_target_checkout(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "groundskeeper.cli.main.validate_target_checkout",
-        lambda process, repository_path, expected_repository: None,
+        lambda process, repository_path, expected_repository, checkout: None,
+    )
+    monkeypatch.setattr(
+        "groundskeeper.cli.main.prepare_target_checkout",
+        lambda process, repository_path, expected_repository, checkout: None,
     )
 
 
@@ -81,6 +85,11 @@ def test_automation_list_json(tmp_path: Path) -> None:
                     "target": {
                         "repository": "me/dots",
                         "repository_path": str(Path("/tmp").resolve()),
+                        "checkout": {
+                            "mode": "existing",
+                            "base_ref": None,
+                            "refresh": "none",
+                        },
                     },
                     "runner": {
                         "type": "pi",
@@ -161,6 +170,11 @@ def test_automation_show_and_validate_use_versioned_envelopes(
                 "target": {
                     "repository": "me/dots",
                     "repository_path": str(Path("/tmp").resolve()),
+                    "checkout": {
+                        "mode": "existing",
+                        "base_ref": None,
+                        "refresh": "none",
+                    },
                 },
                 "runner": {
                     "type": "pi",
@@ -211,6 +225,11 @@ def test_inspect_full_versioned_payload(mock_tracker: object, tmp_path: Path) ->
             "target": {
                 "repository": "me/dots",
                 "repository_path": str(Path("/tmp").resolve()),
+                "checkout": {
+                    "mode": "existing",
+                    "base_ref": None,
+                    "refresh": "none",
+                },
             },
             "tasks": [],
         },
@@ -271,6 +290,11 @@ def test_tick_dry_run_omits_issue_body_from_json(
             "target": {
                 "repository": "me/dots",
                 "repository_path": str(Path("/tmp").resolve()),
+                "checkout": {
+                    "mode": "existing",
+                    "base_ref": None,
+                    "refresh": "none",
+                },
             },
             "task": {
                 "id": "7",

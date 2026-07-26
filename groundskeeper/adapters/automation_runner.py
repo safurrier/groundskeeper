@@ -13,7 +13,11 @@ from groundskeeper.domain.automation import (
     SessionMetadata,
     WorkResult,
 )
-from groundskeeper.domain.config import AutomationPolicy, PiRunnerConfig
+from groundskeeper.domain.config import (
+    AutomationCheckout,
+    AutomationPolicy,
+    PiRunnerConfig,
+)
 from groundskeeper.domain.models import Skill
 
 
@@ -28,9 +32,17 @@ class PiPromptExecutor(Protocol):
 class AutomationSkillRenderer:
     """Adds normalized task context to a configured Groundskeeper skill."""
 
-    def __init__(self, skill: Skill, policy: AutomationPolicy) -> None:
+    def __init__(
+        self,
+        skill: Skill,
+        policy: AutomationPolicy,
+        checkout: AutomationCheckout,
+        base_sha: str | None = None,
+    ) -> None:
         self._skill = skill
         self._policy = policy
+        self._checkout = checkout
+        self._base_sha = base_sha
 
     def render(
         self,
@@ -41,7 +53,7 @@ class AutomationSkillRenderer:
         """Render a skill without changing ordinary skill rendering behavior."""
         return (
             f"{self._skill.render()}\n\n"
-            f"{self._context(task, recovery, self._policy, settings)}"
+            f"{self._context(task, recovery, self._policy, self._checkout, self._base_sha, settings)}"
         )
 
     @staticmethod
@@ -49,6 +61,8 @@ class AutomationSkillRenderer:
         task: AdmittedTask,
         recovery: bool,
         policy: AutomationPolicy,
+        checkout: AutomationCheckout,
+        base_sha: str | None,
         settings: PiExecutionSettings,
     ) -> str:
         recovery_context = (
@@ -72,6 +86,10 @@ class AutomationSkillRenderer:
                 f"FACTORY_TASK_KIND: {contract.kind.value}",
                 f"FACTORY_EXECUTION_MODE: {contract.mode.value if contract.mode else ''}",
                 "FACTORY_DEPENDENCY_STATUS: resolved",
+                f"TARGET_CHECKOUT_MODE: {checkout.mode}",
+                f"TARGET_BASE_REF: {checkout.base_ref or ''}",
+                f"TARGET_BASE_SHA: {base_sha or ''}",
+                f"TARGET_REFRESH: {checkout.refresh}",
                 f"POLICY_CONCURRENCY: {policy.concurrency}",
                 f"POLICY_OUTPUT: {policy.output}",
                 f"POLICY_MERGE: {policy.merge}",
