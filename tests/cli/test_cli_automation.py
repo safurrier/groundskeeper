@@ -351,6 +351,7 @@ def test_tick_dry_run_omits_issue_body_from_json(
             "session_id": None,
             "session_name": None,
             "resume_command": None,
+            "operator_detail": None,
         },
         "exit_code": 0,
     }

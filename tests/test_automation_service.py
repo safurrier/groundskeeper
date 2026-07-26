@@ -98,12 +98,19 @@ def _raise_running_label_changed(task: AutomationTask) -> AutomationTask:
 
 class FakeRunner:
     def __init__(
-        self, result: WorkResult, metadata: SessionMetadata | None = None
+        self,
+        result: WorkResult,
+        metadata: SessionMetadata | None = None,
+        readiness: str | None = None,
     ) -> None:
         self.result = result
         self.metadata = metadata
+        self.readiness_reason = readiness
         self.calls = 0
         self.recovery_calls: list[bool] = []
+
+    def readiness(self, task: AutomationTask) -> str | None:
+        return self.readiness_reason
 
     def session_metadata(self, task: AutomationTask) -> SessionMetadata | None:
         return self.metadata
@@ -163,6 +170,23 @@ def test_invalid_admission_blocks_without_runner_and_dry_run_is_mutation_free() 
     assert tracker.transitions == [
         (TaskState.BLOCKED, "missing exact ## Factory Task section")
     ]
+    assert runner.calls == 0
+
+
+def test_occupied_managed_workspace_waits_without_claiming_unrelated_task() -> None:
+    tracker = FakeTracker()
+    reason = "managed target has uncommitted work for another task"
+    runner = FakeRunner(WorkResult(True), readiness=reason)
+
+    dry = AutomationService(tracker, runner).tick(AUTOMATION, dry_run=True)
+    live = AutomationService(tracker, runner).tick(AUTOMATION)
+
+    assert dry.status == "would-wait"
+    assert live.status == "not-claimed"
+    assert dry.detail == live.detail == reason
+    assert live.operator_detail == reason
+    assert tracker.claims == []
+    assert tracker.transitions == []
     assert runner.calls == 0
 
 
@@ -341,6 +365,7 @@ def test_public_blocker_detail_is_used_for_durable_worker_failure() -> None:
 
     assert result.status == "blocked"
     assert result.detail == "Summary: Public-safe failure.\n\nNext action: Fix it."
+    assert result.operator_detail == "private process detail"
 
 
 def test_worker_output_pr_must_match_tracker_closing_reference() -> None:

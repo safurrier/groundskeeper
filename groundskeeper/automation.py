@@ -102,6 +102,9 @@ class AutomationService:
                 return self._block(automation.name, task, admission.reason)
             admitted = _require_admitted(admission)
             task = admitted.task
+            waiting = self._workspace_wait(automation.name, task, dry_run)
+            if waiting is not None:
+                return waiting
             if dry_run:
                 return TickResult(automation.name, "would-resume", task)
             return self._finish(
@@ -122,6 +125,11 @@ class AutomationService:
                         task,
                         detail=admission.reason,
                     )
+                waiting = self._workspace_wait(
+                    automation.name, admission.task, dry_run=True
+                )
+                if waiting is not None:
+                    return waiting
                 return TickResult(automation.name, "would-resume", admission.task)
             return self._claim_and_run(automation.name, task, recovery=True)
 
@@ -141,6 +149,11 @@ class AutomationService:
                     task,
                     detail=admission.reason,
                 )
+            waiting = self._workspace_wait(
+                automation.name, admission.task, dry_run=True
+            )
+            if waiting is not None:
+                return waiting
             return TickResult(automation.name, "would-dispatch", admission.task)
         return self._claim_and_run(automation.name, task, recovery=False)
 
@@ -148,6 +161,9 @@ class AutomationService:
         self, name: str, task: AutomationTask, recovery: bool
     ) -> TickResult:
         """Atomically admit queued work before starting or resuming its session."""
+        waiting = self._workspace_wait(name, task, dry_run=False)
+        if waiting is not None:
+            return waiting
         claim = self._tracker.claim(task)
         if not claim.claimed:
             return TickResult(name, "not-claimed", task, detail=claim.reason)
@@ -161,6 +177,21 @@ class AutomationService:
         admitted_task = admitted.task
         result = self._runner.run(admitted, recovery=recovery)
         return self._finish(name, admitted_task, result)
+
+    def _workspace_wait(
+        self, name: str, task: AutomationTask, dry_run: bool
+    ) -> TickResult | None:
+        """Leave tracker state untouched while a managed workspace is occupied."""
+        reason = self._runner.readiness(task)
+        if reason is None:
+            return None
+        return TickResult(
+            name,
+            "would-wait" if dry_run else "not-claimed",
+            task,
+            detail=reason,
+            operator_detail=reason,
+        )
 
     def _before_dispatch(
         self, name: str, task: AutomationTask, dry_run: bool
@@ -272,4 +303,5 @@ class AutomationService:
             session_id=result.session_id if result else None,
             session_name=result.session_name if result else None,
             resume_command=result.resume_command if result else None,
+            operator_detail=(result.error or None) if result else None,
         )

@@ -91,18 +91,37 @@ target:
 ```
 
 When `checkout` is omitted, `mode: existing` preserves the original behavior
-and Pi runs in `repository-path`. `mode: isolated-worktree` requires an explicit
-`base-ref`. `refresh: none` resolves the locally available ref without network
-mutation. `refresh: fetch` requires an `origin/*` base and, for a live tick only,
-fetches that exact branch under the repository lock before tracker access.
-After claim, Groundskeeper atomically pins that resolved commit for the task,
-creates a deterministic branch and worktree under its host state directory, and
-runs Pi there. Deferred/running recovery reuses the same worktree and original
-base even if the configured ref has advanced. The configured skill owns workflow
-instructions, not Git checkout lifecycle. Groundskeeper never checks, cleans,
-stashes, resets, checks out, or edits the donor working tree. Fetch failure or
-an unresolved base stops before issue claim; worktree invariant failures stop
-before worker launch and leave claimed work recoverable on the next tick.
+and Pi runs in `repository-path`. Both managed modes require an explicit
+`base-ref`. `mode: isolated-worktree` treats `repository-path` as a donor and
+creates a deterministic task worktree under the host state directory.
+`mode: managed-worktree` instead reuses `repository-path` itself. That path must
+be a linked worktree, initially clean and detached or already on a
+`groundskeeper/task-*` branch. A dirty task branch may be resumed, but
+Groundskeeper refuses to switch away from it. Primary checkouts and ordinary
+local branches are rejected. This mode is useful for large repositories whose
+disposable linked worktree already shares a populated local object store and
+working tree. Its `base-ref` must be a stable named ref such as `origin/main` or
+a full commit SHA. Checkout-relative expressions and Groundskeeper task refs are
+rejected because the managed worktree moves between task branches.
+
+`refresh: none` resolves the locally available ref without network mutation.
+`refresh: fetch` requires an `origin/*` base and, for a live tick only, fetches
+that exact branch under the repository lock before tracker access. After claim,
+Groundskeeper atomically pins that resolved commit for the task and creates or
+switches to its deterministic branch. Deferred/running recovery reuses the same
+workspace and original base even if the configured ref has advanced.
+When a different task branch contains uncommitted work, Groundskeeper leaves the
+next queue item unclaimed until an operator preserves or reconciles that work.
+
+The configured skill owns workflow instructions, not Git checkout lifecycle.
+Groundskeeper never cleans, stashes, or hard-resets a configured checkout.
+Fetch failure or an unresolved base stops before issue claim. Workspace
+preparation failures after claim transition the task to blocked rather than
+leaving it running. If Git is interrupted while first materializing an isolated
+worktree, Groundskeeper automatically quarantines and recreates the partial
+directory only when its exact Git pointer is unregistered and its task branch
+has not advanced beyond the pinned base; otherwise it requires manual recovery.
+Quarantine preserves any files materialized before interruption.
 
 Task worktrees, their local branches, and pinned base refs are retained after a
 terminal transition so draft-PR review and deterministic recovery never lose

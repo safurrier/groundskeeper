@@ -23,6 +23,7 @@ from groundskeeper.adapters.process import (
     ProcessClient,
 )
 from groundskeeper.adapters.target_checkout import (
+    TargetCheckoutError,
     TargetCheckoutManager,
     TargetWorkspace,
 )
@@ -57,6 +58,14 @@ class FakePiClient:
     ) -> WorkResult:
         self.prompt, self.cwd, self.settings = prompt, cwd, settings
         return WorkResult(True)
+
+
+class FailingCheckout:
+    def readiness_for(self, task: AutomationTask) -> str | None:
+        return None
+
+    def workspace_for(self, task: AutomationTask) -> TargetWorkspace:
+        raise TargetCheckoutError("local checkout detail")
 
 
 def _skill() -> Skill:
@@ -225,6 +234,37 @@ def test_pi_runner_exposes_session_metadata_without_starting_worker() -> None:
     assert metadata.session_id
     assert metadata.session_name == "gk-source-queue-3-to-target-repo"
     assert metadata.resume_command == f"pi --session {metadata.session_id}"
+    assert client.settings is None
+
+
+def test_pi_runner_normalizes_target_workspace_failure() -> None:
+    client = FakePiClient()
+    runner = PiAutomationRunner(
+        client,
+        FailingCheckout(),
+        AutomationSkillRenderer(_skill(), AutomationPolicy(), AutomationCheckout()),
+        PiRunnerConfig(skill="issue-implementation"),
+    )
+    task = AutomationTask(
+        "github",
+        "Fix it",
+        "Acceptance",
+        "https://issue/3",
+        "alex",
+        GitHubIssueIdentity("source/queue", 3),
+        "target/repo",
+        contract=_contract(),
+    )
+
+    result = runner.run(_admitted(task))
+
+    assert not result.success
+    assert result.exit_code == 2
+    assert result.error == "local checkout detail"
+    assert (
+        result.public_detail
+        == "Target workspace preparation failed before worker launch"
+    )
     assert client.settings is None
 
 

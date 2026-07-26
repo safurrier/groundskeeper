@@ -66,14 +66,17 @@ gk automation tick daily-maintenance --json
 `validate` checks configuration, skill resolution, the Pi executable, fixed
 policy, and that the target path is a Git worktree whose GitHub `origin` matches
 the configured target, without contacting GitHub or claiming work. For an
-`isolated-worktree` target it also resolves the configured base ref. A live tick
-with `refresh: fetch` refreshes the exact `origin/*` branch under the host lock,
-then freezes its commit SHA before tracker access.
+`isolated-worktree` or `managed-worktree` target it also resolves the configured
+base ref. A managed target must be a linked disposable worktree; it is reused
+directly instead of materializing another task checkout. It starts clean, but a
+dirty Groundskeeper task branch remains resumable. A live tick with
+`refresh: fetch` refreshes the exact `origin/*` branch under the host lock, then
+freezes its commit SHA before tracker access.
 Validation and dry-run never fetch. The target path is a donor checkout; its
-dirty working tree is neither inspected nor modified by Groundskeeper. After
-claim, Groundskeeper creates a deterministic task branch and worktree from the
-frozen SHA, runs Pi there, and reuses that same worktree and original base when
-recovering the deterministic session. Source issue
+dirty working tree is neither inspected nor modified by Groundskeeper in
+`isolated-worktree` mode. After claim, Groundskeeper creates a deterministic
+task branch from the frozen SHA, runs Pi there, and reuses that same workspace
+and original base when recovering the deterministic session. Source issue
 discovery, admission, labels, dependencies, and comments stay in the source
 repository. Pull-request reconciliation queries the
 exact source issue's closing-PR connection and filters results to the target

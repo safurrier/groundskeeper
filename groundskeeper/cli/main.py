@@ -576,6 +576,7 @@ def _automation_tick_exit_code(status: str) -> int:
         "would-dispatch": 0,
         "would-resume": 0,
         "would-block": 0,
+        "would-wait": 0,
         "not-claimed": 4,
         "blocked": 5,
     }.get(status, 2)
@@ -707,6 +708,7 @@ def automation_tick(
         "session_id": result.session_id,
         "session_name": result.session_name,
         "resume_command": result.resume_command,
+        "operator_detail": result.operator_detail,
     }
     exit_code = _automation_tick_exit_code(result.status)
     if json_output:
@@ -831,6 +833,7 @@ def automation_run_scheduled(
             _automation_task_data(result),
             result.detail or None,
             result.pull_request_url,
+            operator_detail=result.operator_detail,
         )
 
     try:
@@ -851,6 +854,7 @@ def automation_run_scheduled(
             "task": run.task,
             "pull_request_url": run.pull_request_url,
             "detail": run.detail,
+            "operator_detail": run.operator_detail,
         }
         for run in runs
     ]

@@ -171,6 +171,186 @@ def test_live_isolated_checkout_stops_when_fetch_fails() -> None:
     assert len(process.calls) == 3
 
 
+def test_managed_checkout_requires_clean_linked_worktree(tmp_path: Path) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repository, check=True)
+    subprocess.run(
+        ["git", "remote", "add", "origin", "git@github.com:example/widgets.git"],
+        cwd=repository,
+        check=True,
+    )
+    (repository / "tracked.txt").write_text("one\n")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=repository, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Groundskeeper Test",
+            "-c",
+            "user.email=groundskeeper@example.com",
+            "commit",
+            "-qm",
+            "one",
+        ],
+        cwd=repository,
+        check=True,
+    )
+
+    with pytest.raises(TargetCheckoutError, match="linked disposable worktree"):
+        validate_target_checkout(
+            ProcessClient(),
+            repository,
+            "example/widgets",
+            AutomationCheckout("managed-worktree", "HEAD", "none"),
+        )
+
+
+def test_managed_checkout_reuses_disposable_worktree_without_second_checkout(
+    tmp_path: Path,
+) -> None:
+    remote = tmp_path / "remote.git"
+    canonical = tmp_path / "canonical"
+    managed = tmp_path / "managed"
+    subprocess.run(["git", "init", "--bare", "-q", remote], check=True)
+    subprocess.run(["git", "clone", "-q", remote, canonical], check=True)
+    subprocess.run(["git", "switch", "-q", "-c", "main"], cwd=canonical, check=True)
+    subprocess.run(
+        ["git", "remote", "set-url", "origin", "git@github.com:example/widgets.git"],
+        cwd=canonical,
+        check=True,
+    )
+    (canonical / "tracked.txt").write_text("one\n")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=canonical, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Groundskeeper Test",
+            "-c",
+            "user.email=groundskeeper@example.com",
+            "commit",
+            "-qm",
+            "one",
+        ],
+        cwd=canonical,
+        check=True,
+    )
+    base = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=canonical,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    subprocess.run(
+        ["git", "worktree", "add", "-q", "--detach", managed, base],
+        cwd=canonical,
+        check=True,
+    )
+
+    checkout = AutomationCheckout("managed-worktree", "main", "none")
+    base_sha = validate_target_checkout(
+        ProcessClient(), managed, "example/widgets", checkout
+    )
+    task = AutomationTask(
+        "github",
+        "Do work",
+        "Acceptance",
+        "https://github.com/source/queue/issues/7",
+        "alex",
+        GitHubIssueIdentity("source/queue", 7),
+        "example/widgets",
+    )
+    state_root = tmp_path / "state"
+    workspace = TargetCheckoutManager(
+        ProcessClient(),
+        managed,
+        "example/widgets",
+        checkout,
+        base_sha,
+        state_root,
+    ).workspace_for(task)
+
+    assert workspace.path == managed
+    assert workspace.base_sha == base
+    assert not (state_root / "worktrees").exists()
+    branch = subprocess.run(
+        ["git", "branch", "--show-current"],
+        cwd=managed,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert branch.startswith("groundskeeper/task-")
+
+    wip = managed / "wip.txt"
+    wip.write_text("resume me\n")
+    resumed_base = validate_target_checkout(
+        ProcessClient(), managed, "example/widgets", checkout
+    )
+    resumed = TargetCheckoutManager(
+        ProcessClient(),
+        managed,
+        "example/widgets",
+        checkout,
+        resumed_base,
+        state_root,
+    ).workspace_for(task)
+    assert resumed.path == managed
+    assert wip.read_text() == "resume me\n"
+    wip.unlink()
+
+    (managed / "tracked.txt").write_text("task one\n")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=managed, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Groundskeeper Test",
+            "-c",
+            "user.email=groundskeeper@example.com",
+            "commit",
+            "-qm",
+            "task one",
+        ],
+        cwd=managed,
+        check=True,
+    )
+    second_task = AutomationTask(
+        "github",
+        "Do other work",
+        "Acceptance",
+        "https://github.com/source/queue/issues/8",
+        "alex",
+        GitHubIssueIdentity("source/queue", 8),
+        "example/widgets",
+    )
+    second_base = validate_target_checkout(
+        ProcessClient(), managed, "example/widgets", checkout
+    )
+    second = TargetCheckoutManager(
+        ProcessClient(),
+        managed,
+        "example/widgets",
+        checkout,
+        second_base,
+        state_root,
+    ).workspace_for(second_task)
+
+    assert second.base_sha == second_base == base
+    assert (
+        subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=managed,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        == base
+    )
+
+
 def test_workspace_rejects_task_for_different_target() -> None:
     manager = TargetCheckoutManager(
         ProcessClient(),
@@ -378,3 +558,131 @@ def test_live_refresh_preserves_dirty_donor_worktree(tmp_path: Path) -> None:
             newer_base,
             tmp_path / "state",
         ).workspace_for(task)
+
+
+def test_isolated_checkout_recovers_only_untouched_interrupted_worktree(
+    tmp_path: Path,
+) -> None:
+    repository = tmp_path / "repository"
+    subprocess.run(["git", "init", "-q", "-b", "main", repository], check=True)
+    subprocess.run(
+        ["git", "remote", "add", "origin", "git@github.com:example/widgets.git"],
+        cwd=repository,
+        check=True,
+    )
+    (repository / "tracked.txt").write_text("one\n")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=repository, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Groundskeeper Test",
+            "-c",
+            "user.email=groundskeeper@example.com",
+            "commit",
+            "-qm",
+            "one",
+        ],
+        cwd=repository,
+        check=True,
+    )
+    process = ProcessClient()
+    checkout = AutomationCheckout("isolated-worktree", "HEAD", "none")
+    base_sha = validate_target_checkout(
+        process, repository, "example/widgets", checkout
+    )
+    task = AutomationTask(
+        "github",
+        "Do work",
+        "Acceptance",
+        "https://github.com/source/queue/issues/7",
+        "alex",
+        GitHubIssueIdentity("source/queue", 7),
+        "example/widgets",
+    )
+    manager = TargetCheckoutManager(
+        process,
+        repository,
+        "example/widgets",
+        checkout,
+        base_sha,
+        tmp_path / "state",
+    )
+    workspace = manager.workspace_for(task)
+    branch_ref = subprocess.run(
+        ["git", "symbolic-ref", "HEAD"],
+        cwd=workspace.path,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    subprocess.run(
+        ["git", "worktree", "remove", str(workspace.path)],
+        cwd=repository,
+        check=True,
+    )
+    workspace.path.mkdir(parents=True)
+    common_dir = target_checkout_common_dir(process, repository)
+    (workspace.path / ".git").write_text(
+        f"gitdir: {common_dir / 'worktrees' / workspace.path.name}\n"
+    )
+    (workspace.path / "partial.txt").write_text("interrupted\n")
+
+    recovered = manager.workspace_for(task)
+
+    assert recovered.path == workspace.path
+    assert not (workspace.path / "partial.txt").exists()
+    assert (
+        workspace.path.with_name(f"{workspace.path.name}.interrupted") / "partial.txt"
+    ).read_text() == "interrupted\n"
+    assert (
+        subprocess.run(
+            ["git", "symbolic-ref", "HEAD"],
+            cwd=workspace.path,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        == branch_ref
+    )
+
+    subprocess.run(
+        ["git", "worktree", "remove", str(workspace.path)],
+        cwd=repository,
+        check=True,
+    )
+    advanced_sha = subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Groundskeeper Test",
+            "-c",
+            "user.email=groundskeeper@example.com",
+            "commit-tree",
+            f"{base_sha}^{{tree}}",
+            "-p",
+            base_sha,
+            "-m",
+            "advanced",
+        ],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    subprocess.run(
+        ["git", "update-ref", branch_ref, advanced_sha, base_sha],
+        cwd=repository,
+        check=True,
+    )
+    workspace.path.mkdir(parents=True)
+    (workspace.path / ".git").write_text(
+        f"gitdir: {common_dir / 'worktrees' / workspace.path.name}\n"
+    )
+    marker = workspace.path / "preserve.txt"
+    marker.write_text("do not delete\n")
+
+    with pytest.raises(TargetCheckoutError):
+        manager.workspace_for(task)
+
+    assert marker.read_text() == "do not delete\n"
