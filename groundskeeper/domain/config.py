@@ -148,6 +148,7 @@ class AutomationCheckout:
     mode: Literal["existing", "isolated-worktree", "managed-worktree"] = "existing"
     base_ref: str | None = None
     refresh: Literal["none", "fetch"] = "none"
+    branch_prefix: str = "groundskeeper/task"
 
 
 @dataclass(frozen=True)
@@ -232,7 +233,7 @@ def _parse_automation_checkout(raw: object, entry_path: str) -> AutomationChecko
     checkout = _automation_mapping(raw, f"{entry_path}.target.checkout")
     _reject_unknown_automation_keys(
         checkout,
-        {"mode", "base-ref", "refresh"},
+        {"mode", "base-ref", "refresh", "branch-prefix"},
         f"{entry_path}.target.checkout",
     )
     mode = checkout.get("mode")
@@ -244,7 +245,7 @@ def _parse_automation_checkout(raw: object, entry_path: str) -> AutomationChecko
     if mode == "existing":
         if set(checkout) != {"mode"}:
             raise ConfigError(
-                "target.checkout base-ref and refresh are only valid for "
+                "target.checkout base-ref, refresh, and branch-prefix are only valid for "
                 "mode: isolated-worktree or managed-worktree"
             )
         return AutomationCheckout()
@@ -260,7 +261,15 @@ def _parse_automation_checkout(raw: object, entry_path: str) -> AutomationChecko
             f"Automation '{entry_path.removeprefix('automations.')}' "
             "requires non-empty target.checkout.base-ref"
         )
-    if mode == "managed-worktree" and not _is_stable_managed_base_ref(base_ref):
+    branch_prefix = checkout.get("branch-prefix", "groundskeeper/task")
+    if not isinstance(branch_prefix, str) or not _is_valid_branch_prefix(branch_prefix):
+        raise ConfigError(
+            f"Automation '{entry_path.removeprefix('automations.')}' "
+            "target.checkout.branch-prefix must be a valid Git branch prefix"
+        )
+    if mode == "managed-worktree" and not _is_stable_managed_base_ref(
+        base_ref, branch_prefix
+    ):
         raise ConfigError(
             "target.checkout.mode: managed-worktree requires a stable named "
             "base-ref or full commit SHA"
@@ -289,16 +298,40 @@ def _parse_automation_checkout(raw: object, entry_path: str) -> AutomationChecko
         mode=cast(Literal["isolated-worktree", "managed-worktree"], mode),
         base_ref=base_ref,
         refresh=cast(Literal["none", "fetch"], refresh),
+        branch_prefix=branch_prefix,
     )
 
 
-def _is_stable_managed_base_ref(value: str) -> bool:
+def _is_valid_branch_prefix(value: str) -> bool:
+    """Accept a strict Git branch prefix that remains valid after a task suffix."""
+    if (
+        not value
+        or value.startswith(("-", "/", "."))
+        or value.endswith(("/", "."))
+        or ".." in value
+        or "@{" in value
+        or "//" in value
+        or any(
+            char in " ~^:?*[\\" or ord(char) < 32 or ord(char) == 127 for char in value
+        )
+    ):
+        return False
+    return all(
+        part and not part.startswith(".") and not part.endswith(".lock")
+        for part in value.split("/")
+    )
+
+
+def _is_stable_managed_base_ref(
+    value: str, branch_prefix: str = "groundskeeper/task"
+) -> bool:
     """Reject checkout-relative revision expressions and task-owned refs."""
     if _COMMIT_SHA_RE.fullmatch(value):
         return True
-    if value in {"HEAD", "@"} or value.startswith("groundskeeper/task-"):
+    task_prefix = f"{branch_prefix}-"
+    if value in {"HEAD", "@"} or value.startswith(task_prefix):
         return False
-    if value.startswith("refs/heads/groundskeeper/task-"):
+    if value.startswith(f"refs/heads/{task_prefix}"):
         return False
     if (
         value.startswith("/")

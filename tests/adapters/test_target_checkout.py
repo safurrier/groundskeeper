@@ -249,7 +249,7 @@ def test_managed_checkout_reuses_disposable_worktree_without_second_checkout(
         check=True,
     )
 
-    checkout = AutomationCheckout("managed-worktree", "main", "none")
+    checkout = AutomationCheckout("managed-worktree", "main", "none", "changes/task")
     base_sha = validate_target_checkout(
         ProcessClient(), managed, "example/widgets", checkout
     )
@@ -282,7 +282,7 @@ def test_managed_checkout_reuses_disposable_worktree_without_second_checkout(
         capture_output=True,
         text=True,
     ).stdout.strip()
-    assert branch.startswith("groundskeeper/task-")
+    assert branch.startswith("changes/task-")
 
     wip = managed / "wip.txt"
     wip.write_text("resume me\n")

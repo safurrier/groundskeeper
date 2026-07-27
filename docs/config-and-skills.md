@@ -34,7 +34,8 @@ Groundskeeper validates this policy and enforces the accepted-result
 postcondition: only an open draft pull request in the target repository reaches
 review. With `policy.link-source-issue: true`, Groundskeeper identifies that PR
 through GitHub's exact source-issue closing references. With it false,
-Groundskeeper identifies the PR through the deterministic automation branch.
+Groundskeeper identifies the PR through the deterministic configured task
+branch.
 It does not sandbox a user-authorized Pi process. An automation skill receives normalized
 `TASK_ID`, `TASK_TITLE`, `TASK_BODY`, `TASK_URL`, target `REPOSITORY`, typed
 `RECOVERY_CONTEXT`, `POLICY_CONCURRENCY`, `POLICY_OUTPUT`, `POLICY_MERGE`,
@@ -61,10 +62,12 @@ The three disclosure fields are strict booleans and default to `true`.
 `link-source-issue: false` tells the worker not to link or mention the source
 queue issue in the target PR and changes reconciliation to the deterministic
 task branch, so it requires `target.checkout.mode: isolated-worktree` or
-`managed-worktree`. The other fields tell the worker whether factory-session identity
-and the Pi resume reference may appear in the target PR. Groundskeeper still
-provides those values in execution context for recovery and may record them on
-the source-side factory issue.
+`managed-worktree`. Review transitions still record a clickable target PR on
+the source issue through GitHub's documented `redirect.github.com` host, which
+does not create a backlink on the target PR. The other fields tell the worker
+whether factory-session identity and the Pi resume reference may appear in the
+target PR. Groundskeeper still provides those values in execution context for
+recovery and may record them on the source-side factory issue.
 
 Every GitHub Issues automation task must begin with exactly these first two H2
 sections. The contract sections cannot contain comments or fenced examples:
@@ -113,6 +116,7 @@ target:
     mode: isolated-worktree
     base-ref: origin/main
     refresh: fetch
+    branch-prefix: changes/task
 ```
 
 When `checkout` is omitted, `mode: existing` preserves the original behavior
@@ -121,13 +125,21 @@ and Pi runs in `repository-path`. Both managed modes require an explicit
 creates a deterministic task worktree under the host state directory.
 `mode: managed-worktree` instead reuses `repository-path` itself. That path must
 be a linked worktree, initially clean and detached or already on a
-`groundskeeper/task-*` branch. A dirty task branch may be resumed, but
-Groundskeeper refuses to switch away from it. Primary checkouts and ordinary
-local branches are rejected. This mode is useful for large repositories whose
-disposable linked worktree already shares a populated local object store and
-working tree. Its `base-ref` must be a stable named ref such as `origin/main` or
-a full commit SHA. Checkout-relative expressions and Groundskeeper task refs are
-rejected because the managed worktree moves between task branches.
+configured task branch (`groundskeeper/task-*` by default). A dirty task branch
+may be resumed, but Groundskeeper refuses to switch away from it. Primary
+checkouts and ordinary local branches are rejected. This mode is useful for
+large repositories whose disposable linked worktree already shares a populated
+local object store and working tree. Its `base-ref` must be a stable named ref
+such as `origin/main` or a full commit SHA. Checkout-relative expressions and
+configured task refs are rejected because the managed worktree moves between
+task branches.
+
+`branch-prefix` defaults to `groundskeeper/task` and must remain stable while
+tasks are running, deferred, or awaiting review. Changing it is an explicit
+cutover: finish or close active task pull requests, preserve any worktree
+changes, and leave a managed worktree clean and detached before applying the
+new configuration. Groundskeeper does not search or resume branches under old
+prefixes.
 
 `refresh: none` resolves the locally available ref without network mutation.
 `refresh: fetch` requires an `origin/*` base and, for a live tick only, fetches
@@ -152,7 +164,7 @@ Task worktrees, their local branches, and pinned base refs are retained after a
 terminal transition so draft-PR review and deterministic recovery never lose
 local state. Groundskeeper currently performs no automatic garbage collection.
 Operators may remove a task worktree with normal `git worktree remove` and then
-delete its `groundskeeper/task-*` branch and `refs/groundskeeper/bases/*` ref
+delete its configured task branch and `refs/groundskeeper/bases/*` ref
 only after the task and pull request no longer need recovery. Automated,
 lock-protected retention policy remains future work.
 

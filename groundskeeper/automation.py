@@ -249,7 +249,12 @@ class AutomationService:
     ) -> TickResult:
         """Record a review transition with available session handoff metadata."""
         detail = _result_detail(pull_request_url, result)
-        self._tracker.transition(task, TaskState.REVIEW, detail)
+        self._tracker.transition(
+            task,
+            TaskState.REVIEW,
+            detail,
+            pull_request_url=pull_request_url,
+        )
         return TickResult(
             name,
             "review",

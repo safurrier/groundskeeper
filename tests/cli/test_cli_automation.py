@@ -97,6 +97,7 @@ def test_automation_list_json(tmp_path: Path) -> None:
                             "mode": "existing",
                             "base_ref": None,
                             "refresh": "none",
+                            "branch_prefix": "groundskeeper/task",
                         },
                     },
                     "runner": {
@@ -219,6 +220,7 @@ def test_automation_show_and_validate_use_versioned_envelopes(
                         "mode": "existing",
                         "base_ref": None,
                         "refresh": "none",
+                        "branch_prefix": "groundskeeper/task",
                     },
                 },
                 "runner": {
@@ -277,6 +279,7 @@ def test_inspect_full_versioned_payload(mock_tracker: object, tmp_path: Path) ->
                     "mode": "existing",
                     "base_ref": None,
                     "refresh": "none",
+                    "branch_prefix": "groundskeeper/task",
                 },
             },
             "tasks": [],
@@ -342,6 +345,7 @@ def test_tick_dry_run_omits_issue_body_from_json(
                     "mode": "existing",
                     "base_ref": None,
                     "refresh": "none",
+                    "branch_prefix": "groundskeeper/task",
                 },
             },
             "task": {

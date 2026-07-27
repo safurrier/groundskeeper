@@ -80,7 +80,12 @@ class FakeTracker:
         return ClaimResult(True, replace(task, state=TaskState.RUNNING))
 
     def transition(
-        self, task: AutomationTask, state: TaskState, detail: str = ""
+        self,
+        task: AutomationTask,
+        state: TaskState,
+        detail: str = "",
+        *,
+        pull_request_url: str | None = None,
     ) -> None:
         self.transitions.append((state, detail))
 

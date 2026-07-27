@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 
 from groundskeeper.adapters.gh import GhClient, GhIssue
@@ -16,7 +17,11 @@ from groundskeeper.domain.automation import (
     TaskState,
     automation_task_branch,
 )
-from groundskeeper.domain.config import AutomationPolicy, GitHubIssuesSource
+from groundskeeper.domain.config import (
+    AutomationCheckout,
+    AutomationPolicy,
+    GitHubIssuesSource,
+)
 from groundskeeper.domain.task_contract import (
     DependencyState,
     FactoryTaskKind,
@@ -32,11 +37,13 @@ class GitHubIssuesTracker:
         source: GitHubIssuesSource,
         target_repository: str,
         policy: AutomationPolicy,
+        checkout: AutomationCheckout,
     ) -> None:
         self._client = client
         self._source = source
         self._target_repository = target_repository
         self._policy = policy
+        self._checkout = checkout
 
     def list_ready(self) -> list[AutomationTask]:
         return self._list_in_state(self._source.ready_label, TaskState.READY)
@@ -149,8 +156,18 @@ class GitHubIssuesTracker:
         return ClaimResult(True, refreshed)
 
     def transition(
-        self, task: AutomationTask, state: TaskState, detail: str = ""
+        self,
+        task: AutomationTask,
+        state: TaskState,
+        detail: str = "",
+        *,
+        pull_request_url: str | None = None,
     ) -> None:
+        rendered_detail = self._source_comment_detail(
+            state,
+            detail,
+            pull_request_url=pull_request_url,
+        )
         target = {
             TaskState.REVIEW: self._source.review_label,
             TaskState.BLOCKED: self._source.blocked_label,
@@ -168,19 +185,58 @@ class GitHubIssuesTracker:
         self._client.replace_label(
             self._source.repository, task.source_issue.number, old, target
         )
-        if detail:
+        if rendered_detail:
             self._client.comment(
                 self._source.repository,
                 task.source_issue.number,
-                f"AI-authored factory update: {detail}",
+                f"AI-authored factory update: {rendered_detail}",
             )
+
+    def _source_comment_detail(
+        self,
+        state: TaskState,
+        detail: str,
+        *,
+        pull_request_url: str | None,
+    ) -> str:
+        """Render a clickable private result without creating a target backlink."""
+        if self._policy.link_source_issue:
+            return detail
+        target_pull_request = re.compile(
+            rf"https://github\.com/{re.escape(self._target_repository)}/pull/"
+            r"(?P<number>[1-9]\d*)",
+            re.IGNORECASE,
+        )
+        if state is TaskState.REVIEW:
+            typed_match = (
+                target_pull_request.fullmatch(pull_request_url)
+                if pull_request_url is not None
+                else None
+            )
+            detail_matches = list(target_pull_request.finditer(detail))
+            if (
+                typed_match is None
+                or len(detail_matches) != 1
+                or detail_matches[0].group("number") != typed_match.group("number")
+            ):
+                raise RuntimeError(
+                    "private review transition requires an exact target pull request URL"
+                )
+        return target_pull_request.sub(
+            lambda match: (
+                f"https://redirect.github.com/{self._target_repository}/pull/"
+                f"{match.group('number')}"
+            ),
+            detail,
+        )
 
     def reconcile_pull_requests(
         self, task: AutomationTask
     ) -> PullRequestReconciliation:
         if not self._policy.link_source_issue:
             return self._client.reconcile_branch_pull_requests(
-                task.target_repository, automation_task_branch(task)
+                task.target_repository,
+                automation_task_branch(task, self._checkout.branch_prefix),
             )
         return self._client.reconcile_pull_requests(
             task.target_repository, task.source_issue
