@@ -335,8 +335,7 @@ class TestAutomationE2E:
             {
                 "author": {"login": "alex"},
                 "body": (
-                    "AI-authored factory update: "
-                    "https://github.com/target/repo/pull/9"
+                    "AI-authored factory update: https://github.com/target/repo/pull/9"
                 ),
             }
         ]
@@ -512,8 +511,7 @@ class TestAutomationE2E:
             {
                 "author": {"login": "alex"},
                 "body": (
-                    "AI-authored factory update: "
-                    "https://github.com/target/repo/pull/9"
+                    "AI-authored factory update: https://github.com/target/repo/pull/9"
                 ),
             }
         ]
