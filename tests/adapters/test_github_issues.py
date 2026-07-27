@@ -55,8 +55,10 @@ class FakeGhClient:
         self.closed: list[tuple[int, bool]] = []
         self.operations: list[str] = []
         self.authenticated_user = "alex"
+        self.authenticated_login_calls = 0
 
     def authenticated_login(self) -> str:
+        self.authenticated_login_calls += 1
         return self.authenticated_user
 
     def list_issues(
@@ -151,6 +153,7 @@ def test_filters_untrusted_authors_and_claim_is_idempotent() -> None:
     assert [task.source_issue.number for task in tasks] == [1]
     assert tasks[0].source_issue.repository == "source/queue"
     assert tasks[0].target_repository == "target/repo"
+    assert client.authenticated_login_calls == 0
     first = tracker.claim(tasks[0])
     second = tracker.claim(tasks[0])
     assert first.claimed and first.task.state == TaskState.RUNNING

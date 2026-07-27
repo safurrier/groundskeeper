@@ -90,7 +90,11 @@ class GitHubIssuesTracker:
             source_issue=GitHubIssueIdentity(self._source.repository, issue.number),
             target_repository=self._target_repository,
             state=state,
-            review_pull_request_url=self._review_pull_request_url(issue),
+            review_pull_request_url=(
+                self._review_pull_request_url(issue)
+                if state in {TaskState.REVIEW, TaskState.CLOSED}
+                else None
+            ),
         )
 
     def _review_pull_request_url(self, issue: GhIssue) -> str | None:
