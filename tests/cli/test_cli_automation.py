@@ -88,6 +88,7 @@ def test_automation_list_json(tmp_path: Path) -> None:
                             "deferred": "factory:deferred",
                             "review": "factory:review",
                             "blocked": "factory:blocked",
+                            "closed": "factory:closed",
                         },
                     },
                     "target": {
@@ -211,6 +212,7 @@ def test_automation_show_and_validate_use_versioned_envelopes(
                         "deferred": "factory:deferred",
                         "review": "factory:review",
                         "blocked": "factory:blocked",
+                        "closed": "factory:closed",
                     },
                 },
                 "target": {

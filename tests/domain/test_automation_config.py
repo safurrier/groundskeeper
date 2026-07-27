@@ -38,6 +38,7 @@ def test_parses_explicit_source_and_target_automation() -> None:
     assert item.source.repository == "me/queue"
     assert item.source.trusted_authors == ("me",)
     assert item.source.deferred_label == "factory:deferred"
+    assert item.source.closed_label == "factory:closed"
     assert item.target.repository == "me/dots"
     assert item.target.repository_path == Path("/tmp/dots").resolve()
     assert item.target.checkout.mode == "existing"
@@ -351,6 +352,7 @@ def test_rejects_unsafe_automation_names(name: str) -> None:
         {"ready": None},
         {"ready": "factory:shared", "running": "factory:shared"},
         {"running": "factory:shared", "deferred": "factory:shared"},
+        {"review": "factory:shared", "closed": "factory:shared"},
         {"unexpected": "factory:other"},
     ],
 )
@@ -370,6 +372,15 @@ def test_parses_custom_deferred_label() -> None:
     automation = get_automations(config)[0]
 
     assert automation.source.deferred_label == "queue:retry-later"
+
+
+def test_parses_custom_closed_label() -> None:
+    config = _valid_automation_config()
+    config["automations"]["daily"]["source"]["labels"] = {  # type: ignore[index]
+        "closed": "queue:done"
+    }
+
+    assert get_automations(config)[0].source.closed_label == "queue:done"
 
 
 @pytest.mark.parametrize(

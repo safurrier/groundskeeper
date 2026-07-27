@@ -29,6 +29,7 @@ class TaskState(str, Enum):
     DEFERRED = "deferred"
     REVIEW = "review"
     BLOCKED = "blocked"
+    CLOSED = "closed"
 
 
 @dataclass(frozen=True)
@@ -59,6 +60,22 @@ class PullRequestReconciliation:
     policy_violation: str | None = None
 
 
+class ReviewPullRequestState(str, Enum):
+    """Terminal-aware state of the exact pull request for a review task."""
+
+    OPEN = "open"
+    MERGED = "merged"
+    CLOSED = "closed"
+
+
+@dataclass(frozen=True)
+class ReviewPullRequest:
+    """One exact target pull request associated with a review task."""
+
+    url: str
+    state: ReviewPullRequestState
+
+
 @dataclass(frozen=True)
 class AutomationTask:
     """A unit of work normalized from an external tracker."""
@@ -72,6 +89,7 @@ class AutomationTask:
     target_repository: str
     state: TaskState = TaskState.READY
     contract: FactoryTaskContract | None = None
+    review_pull_request_url: str | None = None
 
 
 def automation_task_identity(task: AutomationTask) -> str:

@@ -29,6 +29,72 @@ def test_reserved_non_attempt_is_refunded(tmp_path: Path) -> None:
     assert ledger.consumed == 0
 
 
+def test_terminal_reconciliation_runs_when_quota_is_exhausted(tmp_path: Path) -> None:
+    ledger = DailyQuotaLedger(tmp_path / "quota.json", date(2026, 7, 26), 1)
+    reconciliations = iter(
+        [ScheduledTick("one", "closed", 0, {"state": "closed"}), None]
+    )
+    with ledger:
+        ledger.consume()
+        runs = run_scheduled_automations(
+            ["one"],
+            ledger,
+            rotation=0,
+            tick=lambda name: pytest.fail(f"unexpected dispatch for {name}"),
+            reconcile=lambda name: next(reconciliations),
+        )
+
+    assert [(run.status, run.consumed_attempt) for run in runs] == [("closed", False)]
+    assert ledger.consumed == 1
+
+
+def test_terminal_reconciliation_drains_then_dispatches_in_same_run(
+    tmp_path: Path,
+) -> None:
+    ledger = DailyQuotaLedger(tmp_path / "quota.json", date(2026, 7, 26), 1)
+    reconciliations = iter(
+        [
+            ScheduledTick("one", "closed", 0, {"issue": 1}),
+            ScheduledTick("one", "closed", 0, {"issue": 2}),
+            None,
+        ]
+    )
+
+    with ledger:
+        runs = run_scheduled_automations(
+            ["one"],
+            ledger,
+            rotation=0,
+            tick=lambda name: ScheduledTick(name, "review", 0, {"issue": 3}),
+            reconcile=lambda name: next(reconciliations),
+        )
+
+    assert [(run.status, run.consumed_attempt) for run in runs] == [
+        ("closed", False),
+        ("closed", False),
+        ("review", True),
+    ]
+    assert ledger.consumed == 1
+
+
+def test_reconciliation_error_stops_dispatch_for_that_automation(
+    tmp_path: Path,
+) -> None:
+    ledger = DailyQuotaLedger(tmp_path / "quota.json", date(2026, 7, 26), 1)
+
+    with ledger:
+        runs = run_scheduled_automations(
+            ["one"],
+            ledger,
+            rotation=0,
+            tick=lambda name: pytest.fail(f"unexpected dispatch for {name}"),
+            reconcile=lambda name: ScheduledTick(name, "error", 2, None),
+        )
+
+    assert [(run.status, run.consumed_attempt) for run in runs] == [("error", False)]
+    assert ledger.consumed == 0
+
+
 def test_reserved_failure_remains_consumed(tmp_path: Path) -> None:
     ledger = DailyQuotaLedger(tmp_path / "quota.json", date(2026, 7, 26), 1)
 

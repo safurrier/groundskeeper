@@ -13,6 +13,8 @@ from groundskeeper.domain.automation import (
     FailureDisposition,
     GitHubIssueIdentity,
     PullRequestReconciliation,
+    ReviewPullRequest,
+    ReviewPullRequestState,
     SessionMetadata,
     TaskState,
     WorkResult,
@@ -48,11 +50,15 @@ class FakeTracker:
     def __init__(self) -> None:
         self.tasks = [TASK]
         self.deferred_tasks: list[AutomationTask] = []
+        self.review_tasks: list[AutomationTask] = []
+        self.closed_tasks: list[AutomationTask] = []
         self.claims: list[AutomationTask] = []
         self.transitions: list[tuple[TaskState, str]] = []
         self.pr: str | None = None
         self.policy_violation: str | None = None
         self.reconciliation_error: str | None = None
+        self.review_pull_request: ReviewPullRequest | None = None
+        self.closed: list[tuple[AutomationTask, bool]] = []
 
     def list_ready(self) -> list[AutomationTask]:
         return self.tasks
@@ -62,6 +68,12 @@ class FakeTracker:
 
     def list_deferred(self) -> list[AutomationTask]:
         return self.deferred_tasks
+
+    def list_review(self) -> list[AutomationTask]:
+        return self.review_tasks
+
+    def list_closed(self) -> list[AutomationTask]:
+        return self.closed_tasks
 
     def refresh(self, task: AutomationTask) -> AutomationTask:
         return task
@@ -96,9 +108,87 @@ class FakeTracker:
             raise RuntimeError(self.reconciliation_error)
         return PullRequestReconciliation(self.pr, self.policy_violation)
 
+    def reconcile_review(self, task: AutomationTask) -> ReviewPullRequest | None:
+        return self.review_pull_request
+
+    def close(self, task: AutomationTask, *, merged: bool) -> None:
+        self.closed.append((task, merged))
+
 
 def _raise_running_label_changed(task: AutomationTask) -> AutomationTask:
     raise RuntimeError("task no longer has lifecycle label factory:running")
+
+
+@pytest.mark.parametrize(
+    ("state", "merged", "detail"),
+    [
+        (ReviewPullRequestState.MERGED, True, "Merged target pull request"),
+        (
+            ReviewPullRequestState.CLOSED,
+            False,
+            "Target pull request closed without merge",
+        ),
+    ],
+)
+def test_terminal_review_closes_without_dispatch(
+    state: ReviewPullRequestState, merged: bool, detail: str
+) -> None:
+    tracker = FakeTracker()
+    review = replace(TASK, state=TaskState.REVIEW)
+    tracker.tasks = []
+    tracker.review_tasks = [review]
+    tracker.review_pull_request = ReviewPullRequest("https://github/pr/9", state)
+    runner = FakeRunner(WorkResult(True))
+
+    result = AutomationService(tracker, runner).tick(AUTOMATION)
+
+    assert result.status == "closed"
+    assert result.task is not None and result.task.state is TaskState.CLOSED
+    assert result.pull_request_url == "https://github/pr/9"
+    assert detail in result.detail
+    assert tracker.closed == [(review, merged)]
+    assert runner.calls == 0
+
+
+def test_open_review_stays_review_and_does_not_block_other_ready_work() -> None:
+    tracker = FakeTracker()
+    tracker.review_tasks = [replace(TASK, state=TaskState.REVIEW)]
+    tracker.review_pull_request = ReviewPullRequest(
+        "https://github/pr/9", ReviewPullRequestState.OPEN
+    )
+    tracker.pr = "https://github/pr/10"
+    runner = FakeRunner(WorkResult(True))
+
+    result = AutomationService(tracker, runner).tick(AUTOMATION)
+
+    assert result.status == "review"
+    assert tracker.closed == []
+
+
+def test_open_closed_label_recovers_partial_terminal_mutation() -> None:
+    tracker = FakeTracker()
+    pending = replace(TASK, state=TaskState.CLOSED)
+    tracker.tasks = []
+    tracker.closed_tasks = [pending]
+    tracker.review_pull_request = ReviewPullRequest(
+        "https://github/pr/9", ReviewPullRequestState.MERGED
+    )
+
+    result = AutomationService(tracker, FakeRunner(WorkResult(True))).tick(AUTOMATION)
+
+    assert result.status == "closed"
+    assert tracker.closed == [(pending, True)]
+
+
+def test_missing_review_pr_preserves_lifecycle_without_mutation() -> None:
+    tracker = FakeTracker()
+    tracker.tasks = []
+    tracker.review_tasks = [replace(TASK, state=TaskState.REVIEW)]
+
+    result = AutomationService(tracker, FakeRunner(WorkResult(True))).tick(AUTOMATION)
+
+    assert result.status == "no-work"
+    assert tracker.closed == []
 
 
 class FakeRunner:

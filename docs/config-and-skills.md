@@ -95,8 +95,8 @@ The configured skill receives typed `FACTORY_TASK_KIND`,
 `FACTORY_EXECUTION_MODE`, and `FACTORY_DEPENDENCY_STATUS=resolved` context.
 Use `gk automation inspect NAME --json` to inspect admission without mutation.
 
-A GitHub issue source has five distinct lifecycle labels. Defaults are shown
-below; every override must be a non-empty string and all five must be distinct:
+A GitHub issue source has six distinct lifecycle labels. Defaults are shown
+below; every override must be a non-empty string and all six must be distinct:
 
 ```yaml
 source:
@@ -109,6 +109,7 @@ source:
     deferred: factory:deferred
     review: factory:review
     blocked: factory:blocked
+    closed: factory:closed
 target:
   repository: example/widgets
   repository-path: /srv/widgets
@@ -118,6 +119,11 @@ target:
     refresh: fetch
     branch-prefix: changes/task
 ```
+
+All configured labels must already exist in the source repository. Before
+rolling out terminal reconciliation, provision the configured `closed` label
+(default `factory:closed`); a missing label makes the GitHub mutation fail
+safely and leaves the issue in review.
 
 When `checkout` is omitted, `mode: existing` preserves the original behavior
 and Pi runs in `repository-path`. Both managed modes require an explicit

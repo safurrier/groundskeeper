@@ -139,6 +139,7 @@ class GitHubIssuesSource:
     review_label: str = "factory:review"
     blocked_label: str = "factory:blocked"
     deferred_label: str = "factory:deferred"
+    closed_label: str = "factory:closed"
 
 
 @dataclass(frozen=True)
@@ -637,6 +638,7 @@ def get_automations(config: Mapping[str, object]) -> list[Automation]:
             "deferred": "factory:deferred",
             "review": "factory:review",
             "blocked": "factory:blocked",
+            "closed": "factory:closed",
         }
         _reject_unknown_automation_keys(
             labels, set(label_defaults), f"{entry_path}.source.labels"
@@ -667,6 +669,7 @@ def get_automations(config: Mapping[str, object]) -> list[Automation]:
                     review_label=resolved_labels["review"],
                     blocked_label=resolved_labels["blocked"],
                     deferred_label=resolved_labels["deferred"],
+                    closed_label=resolved_labels["closed"],
                 ),
                 target=AutomationTarget(
                     repository=target_repository,

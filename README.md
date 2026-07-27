@@ -26,6 +26,7 @@ automations:
         deferred: factory:deferred
         review: factory:review
         blocked: factory:blocked
+        closed: factory:closed
     target:
       repository: example/widgets
       repository-path: /Users/you/src/widgets
@@ -144,7 +145,16 @@ factory:ready ──claim──> factory:running ──accepted draft PR──> 
                               └──durable failure/policy violation──> factory:blocked
 
 factory:deferred ──next tick claim/resume──> factory:running
+factory:review ──merged PR──────────────> factory:closed + issue completed
+               └─closed without merge──> factory:closed + issue not planned
 ```
+
+`factory:closed` is retained on the closed source issue as the terminal
+automation state. Reconciliation runs before worker quota, including when the
+daily dispatch quota is exhausted. A retry is a new source issue: source issue
+identity deterministically owns its target branch, pull request, and Pi session.
+Provision every configured lifecycle label in the source repository before
+rollout, including `factory:closed`; Groundskeeper does not create labels.
 
 Each source repository, issue number, and target repository tuple maps to a
 deterministic UUIDv5 Pi session and stable run name. Pi

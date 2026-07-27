@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import replace
+from typing import Literal
 
 from groundskeeper.adapters.gh import GhClient, GhIssue
 from groundskeeper.domain.automation import (
@@ -14,6 +15,7 @@ from groundskeeper.domain.automation import (
     ClaimResult,
     GitHubIssueIdentity,
     PullRequestReconciliation,
+    ReviewPullRequest,
     TaskState,
     automation_task_branch,
 )
@@ -54,8 +56,24 @@ class GitHubIssuesTracker:
     def list_deferred(self) -> list[AutomationTask]:
         return self._list_in_state(self._source.deferred_label, TaskState.DEFERRED)
 
-    def _list_in_state(self, label: str, state: TaskState) -> list[AutomationTask]:
-        issues = self._client.list_issues(self._source.repository, (label,))
+    def list_review(self) -> list[AutomationTask]:
+        return self._list_in_state(
+            self._source.review_label, TaskState.REVIEW, issue_state="all"
+        )
+
+    def list_closed(self) -> list[AutomationTask]:
+        return self._list_in_state(self._source.closed_label, TaskState.CLOSED)
+
+    def _list_in_state(
+        self,
+        label: str,
+        state: TaskState,
+        *,
+        issue_state: Literal["open", "closed", "all"] = "open",
+    ) -> list[AutomationTask]:
+        issues = self._client.list_issues(
+            self._source.repository, (label,), state=issue_state
+        )
         return [
             self._task_from_issue(issue, state)
             for issue in issues
@@ -72,7 +90,30 @@ class GitHubIssuesTracker:
             source_issue=GitHubIssueIdentity(self._source.repository, issue.number),
             target_repository=self._target_repository,
             state=state,
+            review_pull_request_url=self._review_pull_request_url(issue),
         )
+
+    def _review_pull_request_url(self, issue: GhIssue) -> str | None:
+        """Recover the exact PR accepted by Groundskeeper's review comment."""
+        target_pull_request = re.compile(
+            rf"https://(?P<host>github\.com|redirect\.github\.com)/"
+            rf"{re.escape(self._target_repository)}/pull/(?P<number>[1-9]\d*)",
+            re.IGNORECASE,
+        )
+        prefix = "AI-authored factory update:"
+        trusted = {author.casefold() for author in self._source.trusted_authors}
+        for comment in reversed(issue.comments):
+            if comment.author.casefold() not in trusted or not comment.body.startswith(
+                prefix
+            ):
+                continue
+            matches = list(target_pull_request.finditer(comment.body))
+            if len(matches) == 1:
+                return (
+                    f"https://github.com/{self._target_repository}/pull/"
+                    f"{matches[0].group('number')}"
+                )
+        return None
 
     def refresh(self, task: AutomationTask) -> AutomationTask:
         """Read and verify the current task immediately before execution."""
@@ -89,6 +130,7 @@ class GitHubIssuesTracker:
             TaskState.DEFERRED: self._source.deferred_label,
             TaskState.REVIEW: self._source.review_label,
             TaskState.BLOCKED: self._source.blocked_label,
+            TaskState.CLOSED: self._source.closed_label,
         }[task.state]
         if expected_label not in issue.labels:
             raise RuntimeError(f"task no longer has lifecycle label {expected_label}")
@@ -163,6 +205,8 @@ class GitHubIssuesTracker:
         *,
         pull_request_url: str | None = None,
     ) -> None:
+        if state is TaskState.CLOSED or task.state is TaskState.CLOSED:
+            raise ValueError("closed lifecycle transitions require close()")
         rendered_detail = self._source_comment_detail(
             state,
             detail,
@@ -241,3 +285,48 @@ class GitHubIssuesTracker:
         return self._client.reconcile_pull_requests(
             task.target_repository, task.source_issue
         )
+
+    def reconcile_review(self, task: AutomationTask) -> ReviewPullRequest | None:
+        """Read the exact review PR without reapplying creation-time draft policy."""
+        if task.review_pull_request_url is None:
+            return None
+        if not self._policy.link_source_issue:
+            return self._client.review_branch_pull_request(
+                task.target_repository,
+                automation_task_branch(task, self._checkout.branch_prefix),
+                task.review_pull_request_url,
+            )
+        return self._client.review_pull_request(
+            task.target_repository,
+            task.source_issue,
+            task.review_pull_request_url,
+        )
+
+    def close(self, task: AutomationTask, *, merged: bool) -> None:
+        """Idempotently retain the terminal label and close the source issue."""
+        issue = self._client.get_issue(
+            self._source.repository, task.source_issue.number
+        )
+        if issue.author not in self._source.trusted_authors:
+            raise RuntimeError("task author is no longer trusted")
+        if self._source.review_label in issue.labels:
+            self._client.replace_label(
+                self._source.repository,
+                task.source_issue.number,
+                self._source.review_label,
+                self._source.closed_label,
+            )
+            issue = self._client.get_issue(
+                self._source.repository, task.source_issue.number
+            )
+        elif self._source.closed_label not in issue.labels:
+            raise RuntimeError(
+                "task no longer has lifecycle label "
+                f"{self._source.review_label} or {self._source.closed_label}"
+            )
+        if issue.state == "open":
+            self._client.close_issue(
+                self._source.repository,
+                task.source_issue.number,
+                merged=merged,
+            )

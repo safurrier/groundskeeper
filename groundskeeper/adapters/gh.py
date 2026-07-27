@@ -5,12 +5,14 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 from groundskeeper.adapters.process import ProcessClient
 from groundskeeper.domain.automation import (
     GitHubIssueIdentity,
     PullRequestReconciliation,
+    ReviewPullRequest,
+    ReviewPullRequestState,
     canonical_github_repository,
 )
 from groundskeeper.domain.task_contract import DependencyState, GitHubDependency
@@ -48,6 +50,12 @@ class GhError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class GhComment:
+    author: str
+    body: str
+
+
+@dataclass(frozen=True)
 class GhIssue:
     number: int
     title: str
@@ -56,6 +64,7 @@ class GhIssue:
     author: str
     labels: tuple[str, ...]
     state: str
+    comments: tuple[GhComment, ...] = ()
 
 
 class GhClient:
@@ -65,7 +74,13 @@ class GhClient:
         self._process = process
         self._cwd = cwd
 
-    def list_issues(self, repository: str, labels: tuple[str, ...]) -> list[GhIssue]:
+    def list_issues(
+        self,
+        repository: str,
+        labels: tuple[str, ...],
+        *,
+        state: Literal["open", "closed", "all"] = "open",
+    ) -> list[GhIssue]:
         argv = (
             "gh",
             "issue",
@@ -73,13 +88,13 @@ class GhClient:
             "--repo",
             repository,
             "--state",
-            "open",
+            state,
             "--limit",
             "1000",
             "--label",
             ",".join(labels),
             "--json",
-            "number,title,body,url,author,labels,state",
+            "number,title,body,url,author,labels,state,comments",
         )
         result = self._process.run(argv, self._cwd, timeout=GH_QUERY_TIMEOUT_SECONDS)
         if not result.success:
@@ -105,7 +120,7 @@ class GhClient:
                 "--repo",
                 repository,
                 "--json",
-                "number,title,body,url,author,labels,state",
+                "number,title,body,url,author,labels,state,comments",
             ),
             self._cwd,
             timeout=GH_QUERY_TIMEOUT_SECONDS,
@@ -133,6 +148,22 @@ class GhClient:
                 if not isinstance(name, str):
                     raise TypeError
                 labels.append(name)
+            comment_values = item.get("comments", [])
+            if not isinstance(comment_values, list):
+                raise TypeError
+            comments: list[GhComment] = []
+            for comment_value in cast(list[object], comment_values):
+                if not isinstance(comment_value, dict):
+                    raise TypeError
+                comment = cast(dict[str, object], comment_value)
+                body = comment.get("body")
+                comment_author = comment.get("author")
+                if not isinstance(comment_author, dict):
+                    raise TypeError
+                comment_login = cast(dict[str, object], comment_author).get("login")
+                if not isinstance(body, str) or not isinstance(comment_login, str):
+                    raise TypeError
+                comments.append(GhComment(comment_login, body))
             author = item.get("author")
             if not isinstance(author, dict):
                 raise TypeError
@@ -153,6 +184,7 @@ class GhClient:
                 author=login,
                 labels=tuple(labels),
                 state=state.lower(),
+                comments=tuple(comments),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise GhError(f"gh {operation} returned incomplete issue data") from error
@@ -194,6 +226,25 @@ class GhClient:
         )
         if not result.success:
             raise GhError(result.stderr.strip() or "failed to comment on issue")
+
+    def close_issue(self, repository: str, issue: int, *, merged: bool) -> None:
+        """Close one source issue with the target PR's terminal disposition."""
+        result = self._process.run(
+            (
+                "gh",
+                "issue",
+                "close",
+                str(issue),
+                "--repo",
+                repository,
+                "--reason",
+                "completed" if merged else "not planned",
+            ),
+            self._cwd,
+            timeout=GH_MUTATION_TIMEOUT_SECONDS,
+        )
+        if not result.success:
+            raise GhError(result.stderr.strip() or "failed to close issue")
 
     def dependency_state(
         self, dependency: GitHubDependency
@@ -257,7 +308,29 @@ class GhClient:
         pull requests. An accepted open draft wins if accepted and violating
         target PRs coexist; otherwise the first target policy violation blocks.
         """
+        pull_requests = self._closing_pull_requests(source_issue)
         canonical_github_repository(target_repository)
+        accepted_url: str | None = None
+        policy_violation: str | None = None
+        for pr_data in pull_requests:
+            repository = cast(str, pr_data["repository"])
+            if repository.casefold() != target_repository.casefold():
+                continue
+            url = cast(str, pr_data["url"])
+            if pr_data["isDraft"] is True and pr_data["state"] == "OPEN":
+                accepted_url = accepted_url or url
+                continue
+            if policy_violation is None:
+                if pr_data["isDraft"] is not True:
+                    policy_violation = f"Closing pull request is not a draft: {url}"
+                else:
+                    policy_violation = f"Closing pull request is not open: {url}"
+        return PullRequestReconciliation(accepted_url, policy_violation)
+
+    def _closing_pull_requests(
+        self, source_issue: GitHubIssueIdentity
+    ) -> list[dict[str, object]]:
+        """Return every PR GitHub records as closing one exact source issue."""
         owner, name = source_issue.repository.split("/")
         pull_requests: list[dict[str, object]] = []
         end_cursor: str | None = None
@@ -301,27 +374,51 @@ class GhClient:
                     "closing pull request query exceeded the supported page limit"
                 )
 
-        accepted_url: str | None = None
-        policy_violation: str | None = None
-        for pr_data in pull_requests:
-            repository = cast(str, pr_data["repository"])
-            if repository.casefold() != target_repository.casefold():
-                continue
-            url = cast(str, pr_data["url"])
-            if pr_data["isDraft"] is True and pr_data["state"] == "OPEN":
-                accepted_url = accepted_url or url
-                continue
-            if policy_violation is None:
-                if pr_data["isDraft"] is not True:
-                    policy_violation = f"Closing pull request is not a draft: {url}"
-                else:
-                    policy_violation = f"Closing pull request is not open: {url}"
-        return PullRequestReconciliation(accepted_url, policy_violation)
+        return pull_requests
+
+    def review_pull_request(
+        self,
+        target_repository: str,
+        source_issue: GitHubIssueIdentity,
+        accepted_url: str,
+    ) -> ReviewPullRequest | None:
+        """Resolve terminal-aware state for an exact closing PR relationship."""
+        canonical_github_repository(target_repository)
+        pull_requests = [
+            item
+            for item in self._closing_pull_requests(source_issue)
+            if cast(str, item["repository"]).casefold() == target_repository.casefold()
+            and cast(str, item["url"]).casefold() == accepted_url.casefold()
+        ]
+        return self._select_review_pull_request(pull_requests)
 
     def reconcile_branch_pull_requests(
         self, target_repository: str, branch: str
     ) -> PullRequestReconciliation:
         """Read target pull requests for one deterministic automation branch."""
+        pull_requests = self._branch_pull_requests(target_repository, branch)
+        canonical_github_repository(target_repository)
+        accepted_url: str | None = None
+        policy_violation: str | None = None
+        for repository, url, is_draft, state, head_branch in pull_requests:
+            if repository.casefold() != target_repository.casefold():
+                continue
+            if head_branch != branch:
+                continue
+            if is_draft and state == "OPEN":
+                accepted_url = accepted_url or url
+                continue
+            if policy_violation is None:
+                if not is_draft:
+                    policy_violation = f"Branch pull request is not a draft: {url}"
+                else:
+                    policy_violation = f"Branch pull request is not open: {url}"
+        return PullRequestReconciliation(accepted_url, policy_violation)
+
+    def _branch_pull_requests(
+        self, target_repository: str, branch: str
+    ) -> list[tuple[str, str, bool, str, str]]:
+        """Return target pull requests for one deterministic branch."""
         canonical_github_repository(target_repository)
         result = self._process.run(
             (
@@ -354,8 +451,6 @@ class GhClient:
                 "branch pull request query reached the supported result limit"
             )
 
-        accepted_url: str | None = None
-        policy_violation: str | None = None
         try:
             pull_requests = [
                 self._parse_branch_pull_request(item)
@@ -363,20 +458,40 @@ class GhClient:
             ]
         except (TypeError, ValueError) as error:
             raise GhError("gh pr list returned incomplete pull request data") from error
-        for repository, url, is_draft, state, head_branch in pull_requests:
-            if repository.casefold() != target_repository.casefold():
-                continue
-            if head_branch != branch:
-                continue
-            if is_draft and state == "OPEN":
-                accepted_url = accepted_url or url
-                continue
-            if policy_violation is None:
-                if not is_draft:
-                    policy_violation = f"Branch pull request is not a draft: {url}"
-                else:
-                    policy_violation = f"Branch pull request is not open: {url}"
-        return PullRequestReconciliation(accepted_url, policy_violation)
+        return pull_requests
+
+    def review_branch_pull_request(
+        self, target_repository: str, branch: str, accepted_url: str
+    ) -> ReviewPullRequest | None:
+        """Resolve terminal-aware state for one deterministic automation branch."""
+        pull_requests = [
+            {
+                "url": url,
+                "state": state,
+                "repository": repository,
+            }
+            for repository, url, _is_draft, state, head_branch in (
+                self._branch_pull_requests(target_repository, branch)
+            )
+            if repository.casefold() == target_repository.casefold()
+            and head_branch == branch
+            and url.casefold() == accepted_url.casefold()
+        ]
+        return self._select_review_pull_request(pull_requests)
+
+    @staticmethod
+    def _select_review_pull_request(
+        pull_requests: list[dict[str, object]],
+    ) -> ReviewPullRequest | None:
+        """Select the safest coherent result when duplicate associations exist."""
+        for state in ("MERGED", "OPEN", "CLOSED"):
+            for pull_request in pull_requests:
+                if pull_request["state"] == state:
+                    return ReviewPullRequest(
+                        cast(str, pull_request["url"]),
+                        ReviewPullRequestState(state.lower()),
+                    )
+        return None
 
     @staticmethod
     def _parse_branch_pull_request(

@@ -84,6 +84,11 @@ automation config
   → validation/dry-run: prove target identity and resolve the optional base without donor mutation
   → live tick: acquire stable source-admission and target-workspace host locks
   → live tick: prove target identity, optionally fetch the exact origin branch, and freeze its commit SHA
+  → reconcile terminal review PRs before dispatch quota
+      exact merged target PR → retain closed label + close source as completed
+      exact closed-unmerged target PR → retain closed label + close source as not planned
+      open or missing evidence → preserve review state
+      open closed-labeled issue → resume an interrupted terminal mutation
   → reconcile running issues before deferred work before ready work
   → parse one exact Factory Task + Dependencies contract and resolve dependency state
   → block malformed, tracking, inaccessible, unresolved, or closed-unmerged dependency work before Pi
@@ -115,11 +120,23 @@ ready ──claim──> running ──accepted draft PR──> review
                    └──auth/model/policy/worker/timeout────────> blocked
 
 deferred ──next tick claim + recovery──> running
+review ──merged target PR──────────────> closed + issue completed
+       └─closed target PR without merge──> closed + issue not planned
 ```
 
 Deferred claims return the issue to `running` before Pi resumes the same UUIDv5
 session. A repeat transient failure returns it to `deferred`; a later accepted
 draft PR reaches `review`.
+
+The retained `closed` label is both the terminal ledger state and the recovery
+checkpoint for a partial label/issue-close mutation. Scheduled review
+reconciliation is quota-free and runs even when no worker attempt remains.
+The trusted factory review comment records the exact accepted target PR URL;
+terminal queries match that URL rather than selecting another PR associated
+with the same source issue or deterministic branch.
+Retry uses a new source issue because one source identity deterministically owns
+its branch, target pull request, and Pi session. Query errors fail without a
+lifecycle mutation.
 
 The source repository owns discovery, admission, dependencies, labels, comments,
 and lifecycle. The target checkout module owns donor validation and refresh,
