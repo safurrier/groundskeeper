@@ -18,9 +18,13 @@ from groundskeeper.domain.task_contract import DependencyState, GitHubDependency
 
 
 class FakeProcess:
-    def __init__(self, stdout: str | list[str], success: bool = True) -> None:
+    def __init__(
+        self,
+        stdout: str | list[str],
+        success: bool | list[bool] = True,
+    ) -> None:
         self.stdout = [stdout] if isinstance(stdout, str) else stdout
-        self.success = success
+        self.success = [success] if isinstance(success, bool) else success
         self.argv: tuple[str, ...] = ()
         self.argv_history: list[tuple[str, ...]] = []
         self.timeout: int | None = None
@@ -31,8 +35,10 @@ class FakeProcess:
         self.argv = argv
         self.argv_history.append(argv)
         self.timeout = timeout
-        stdout = self.stdout[min(len(self.argv_history) - 1, len(self.stdout) - 1)]
-        return CommandResult(argv, cwd, 0 if self.success else 1, stdout, "")
+        call_index = len(self.argv_history) - 1
+        stdout = self.stdout[min(call_index, len(self.stdout) - 1)]
+        success = self.success[min(call_index, len(self.success) - 1)]
+        return CommandResult(argv, cwd, 0 if success else 1, stdout, "")
 
 
 def _graphql_page(
@@ -101,6 +107,41 @@ def test_authenticated_login_is_typed_and_cached() -> None:
     assert client.authenticated_login() == "factory-bot"
     assert client.authenticated_login() == "factory-bot"
     assert process.argv_history == [("gh", "api", "user")]
+
+
+def test_authenticated_login_command_failure_is_not_cached() -> None:
+    process = FakeProcess(
+        ["", '{"login":"factory-bot"}'],
+        success=[False, True],
+    )
+    client = GhClient(process, Path("."))
+
+    with pytest.raises(GhError, match="failed to resolve authenticated GitHub actor"):
+        client.authenticated_login()
+
+    assert client.authenticated_login() == "factory-bot"
+    assert process.argv_history == [
+        ("gh", "api", "user"),
+        ("gh", "api", "user"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        ("not json", "invalid JSON"),
+        ("[]", "unexpected JSON shape"),
+        ("null", "unexpected JSON shape"),
+        ("{}", "incomplete user data"),
+        ('{"login":""}', "incomplete user data"),
+        ('{"login":42}', "incomplete user data"),
+    ],
+)
+def test_authenticated_login_rejects_invalid_payload(
+    payload: str, message: str
+) -> None:
+    with pytest.raises(GhError, match=message):
+        GhClient(FakeProcess(payload), Path(".")).authenticated_login()
 
 
 def test_issue_discovery_is_server_filtered_and_bounded() -> None:

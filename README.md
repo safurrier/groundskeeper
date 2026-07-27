@@ -20,6 +20,7 @@ automations:
       type: github-issues
       repository: example/work-factory
       trusted-authors: [maintainer]
+      automation-authors: [maintainer]
       labels:
         ready: factory:ready
         running: factory:running

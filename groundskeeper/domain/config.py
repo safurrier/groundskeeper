@@ -134,6 +134,7 @@ class GitHubIssuesSource:
 
     repository: str
     trusted_authors: tuple[str, ...]
+    automation_authors: tuple[str, ...]
     ready_label: str = "factory:ready"
     running_label: str = "factory:running"
     review_label: str = "factory:review"
@@ -516,7 +517,13 @@ def get_automations(config: Mapping[str, object]) -> list[Automation]:
             )
         _reject_unknown_automation_keys(
             source,
-            {"type", "repository", "trusted-authors", "labels"},
+            {
+                "type",
+                "repository",
+                "trusted-authors",
+                "automation-authors",
+                "labels",
+            },
             f"{entry_path}.source",
         )
         if not isinstance(target, dict):
@@ -605,6 +612,17 @@ def get_automations(config: Mapping[str, object]) -> list[Automation]:
             raise ConfigError(
                 f"Automation '{name}' requires non-empty source.trusted-authors"
             )
+        automation_authors = source.get("automation-authors")
+        if (
+            not isinstance(automation_authors, list)
+            or not automation_authors
+            or not all(
+                isinstance(author, str) and author for author in automation_authors
+            )
+        ):
+            raise ConfigError(
+                f"Automation '{name}' requires non-empty source.automation-authors"
+            )
         concurrency = policy.get("concurrency", 1)
         if concurrency != 1:
             raise ConfigError(
@@ -664,6 +682,7 @@ def get_automations(config: Mapping[str, object]) -> list[Automation]:
                 source=GitHubIssuesSource(
                     repository=source_repository,
                     trusted_authors=tuple(cast(list[str], authors)),
+                    automation_authors=tuple(cast(list[str], automation_authors)),
                     ready_label=resolved_labels["ready"],
                     running_label=resolved_labels["running"],
                     review_label=resolved_labels["review"],

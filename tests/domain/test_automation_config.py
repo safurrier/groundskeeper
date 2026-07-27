@@ -14,6 +14,7 @@ def _valid_automation_config() -> dict[str, object]:
                     "type": "github-issues",
                     "repository": "me/queue",
                     "trusted-authors": ["me"],
+                    "automation-authors": ["me"],
                     "labels": {},
                 },
                 "target": {
@@ -37,6 +38,7 @@ def test_parses_explicit_source_and_target_automation() -> None:
 
     assert item.source.repository == "me/queue"
     assert item.source.trusted_authors == ("me",)
+    assert item.source.automation_authors == ("me",)
     assert item.source.deferred_label == "factory:deferred"
     assert item.source.closed_label == "factory:closed"
     assert item.target.repository == "me/dots"
@@ -219,6 +221,14 @@ def test_requires_explicit_source_and_target(missing: str) -> None:
     del config["automations"]["daily"][missing]  # type: ignore[index]
 
     with pytest.raises(ConfigError, match=missing):
+        get_automations(config)
+
+
+def test_requires_explicit_automation_authors() -> None:
+    config = _valid_automation_config()
+    del config["automations"]["daily"]["source"]["automation-authors"]  # type: ignore[index]
+
+    with pytest.raises(ConfigError, match=r"source\.automation-authors"):
         get_automations(config)
 
 

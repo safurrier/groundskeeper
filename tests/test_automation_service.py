@@ -40,7 +40,7 @@ TASK = AutomationTask(
 )
 AUTOMATION = Automation(
     "daily",
-    GitHubIssuesSource("source/queue", ("alex",)),
+    GitHubIssuesSource("source/queue", ("alex",), ("alex",)),
     AutomationTarget("target/repo", Path("/tmp/repo")),
     PiRunnerConfig(skill="issue-implementation"),
 )

@@ -105,12 +105,15 @@ class GitHubIssuesTracker:
             re.IGNORECASE,
         )
         prefix = "AI-authored factory update:"
-        automation_author = self._client.authenticated_login().casefold()
+        automation_authors = {
+            author.casefold() for author in self._source.automation_authors
+        }
+        rejected_marker_authors: set[str] = set()
         for comment in reversed(issue.comments):
-            if (
-                comment.author.casefold() != automation_author
-                or not comment.body.startswith(prefix)
-            ):
+            if not comment.body.startswith(prefix):
+                continue
+            if comment.author.casefold() not in automation_authors:
+                rejected_marker_authors.add(comment.author)
                 continue
             matches = list(target_pull_request.finditer(comment.body))
             if len(matches) == 1:
@@ -118,7 +121,24 @@ class GitHubIssuesTracker:
                     f"https://github.com/{self._target_repository}/pull/"
                     f"{matches[0].group('number')}"
                 )
+        if rejected_marker_authors:
+            authors = ", ".join(sorted(rejected_marker_authors, key=str.casefold))
+            raise RuntimeError(
+                "factory review marker was written by an unconfigured automation "
+                f"author: {authors}; add the prior actor to "
+                "source.automation-authors during credential migration"
+            )
         return None
+
+    def _require_configured_automation_actor(self) -> None:
+        actor = self._client.authenticated_login()
+        if actor.casefold() not in {
+            author.casefold() for author in self._source.automation_authors
+        }:
+            raise RuntimeError(
+                f"authenticated GitHub actor {actor!r} is not listed in "
+                "source.automation-authors"
+            )
 
     def refresh(self, task: AutomationTask) -> AutomationTask:
         """Read and verify the current task immediately before execution."""
@@ -232,6 +252,7 @@ class GitHubIssuesTracker:
             TaskState.BLOCKED: self._source.blocked_label,
         }[task.state]
         if state is TaskState.REVIEW and rendered_detail:
+            self._require_configured_automation_actor()
             self._client.comment(
                 self._source.repository,
                 task.source_issue.number,

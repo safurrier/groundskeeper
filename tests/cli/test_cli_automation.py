@@ -44,6 +44,7 @@ automations:
       type: github-issues
       repository: me/queue
       trusted-authors: [alex]
+      automation-authors: [alex]
     target:
       repository: me/dots
       repository-path: /tmp

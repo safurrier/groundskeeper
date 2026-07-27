@@ -103,6 +103,7 @@ source:
   type: github-issues
   repository: example/work-factory
   trusted-authors: [maintainer]
+  automation-authors: [maintainer]
   labels:
     ready: factory:ready
     running: factory:running
@@ -119,6 +120,13 @@ target:
     refresh: fetch
     branch-prefix: changes/task
 ```
+
+`trusted-authors` controls who may submit factory tasks.
+`automation-authors` separately lists the GitHub accounts allowed to write
+trusted lifecycle comments. It is required and Groundskeeper verifies the
+currently authenticated account before writing a review marker. During an
+account or credential migration, list both the prior and replacement accounts
+until every retained review marker from the prior account has reconciled.
 
 All configured labels must already exist in the source repository. Before
 rolling out terminal reconciliation, provision the configured `closed` label
