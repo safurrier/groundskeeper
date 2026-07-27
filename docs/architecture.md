@@ -134,6 +134,11 @@ reconciliation is quota-free and runs even when no worker attempt remains.
 The trusted factory review comment records the exact accepted target PR URL;
 terminal queries match that URL rather than selecting another PR associated
 with the same source issue or deterministic branch.
+The configured trusted-author set is the authorization seam for both task
+admission and these lifecycle comments; Groundskeeper does not attempt to
+protect the issue ledger from an actor already authorized to mutate it and run
+Pi. The review comment is written before the review label so an interrupted
+transition remains recoverable.
 Retry uses a new source issue because one source identity deterministically owns
 its branch, target pull request, and Pi session. Query errors fail without a
 lifecycle mutation.

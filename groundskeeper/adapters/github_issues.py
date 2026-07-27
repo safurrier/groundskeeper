@@ -226,10 +226,16 @@ class GitHubIssuesTracker:
             TaskState.REVIEW: self._source.review_label,
             TaskState.BLOCKED: self._source.blocked_label,
         }[task.state]
+        if state is TaskState.REVIEW and rendered_detail:
+            self._client.comment(
+                self._source.repository,
+                task.source_issue.number,
+                f"AI-authored factory update: {rendered_detail}",
+            )
         self._client.replace_label(
             self._source.repository, task.source_issue.number, old, target
         )
-        if rendered_detail:
+        if rendered_detail and state is not TaskState.REVIEW:
             self._client.comment(
                 self._source.repository,
                 task.source_issue.number,

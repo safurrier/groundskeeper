@@ -53,6 +53,7 @@ class FakeGhClient:
         self.review_pull_request: ReviewPullRequest | None = None
         self.review_pull_request_urls: list[str] = []
         self.closed: list[tuple[int, bool]] = []
+        self.operations: list[str] = []
 
     def list_issues(
         self,
@@ -75,6 +76,7 @@ class FakeGhClient:
 
     def replace_label(self, repository: str, issue: int, old: str, new: str) -> None:
         self.issue_repositories.append(repository)
+        self.operations.append("label")
         self.labels.append((issue, old, new))
         self.issues = [
             replace(
@@ -88,6 +90,7 @@ class FakeGhClient:
 
     def comment(self, repository: str, issue: int, body: str) -> None:
         self.issue_repositories.append(repository)
+        self.operations.append("comment")
         self.comments.append((issue, body))
 
     def dependency_state(
@@ -499,6 +502,43 @@ def test_private_review_transition_uses_clickable_no_backlink_result_url() -> No
             ),
         )
     ]
+    assert client.operations[-2:] == ["comment", "label"]
+
+
+def test_review_comment_survives_interrupted_label_transition() -> None:
+    client = FakeGhClient()
+    tracker = GitHubIssuesTracker(
+        client,
+        GitHubIssuesSource("source/queue", ("alex",)),
+        "target/repo",
+        AutomationPolicy(),
+        AutomationCheckout(),
+    )
+    running = tracker.claim(tracker.list_ready()[0]).task
+    original_replace = client.replace_label
+
+    def fail_review_label(repository: str, issue: int, old: str, new: str) -> None:
+        if new == "factory:review":
+            raise RuntimeError("interrupted label transition")
+        original_replace(repository, issue, old, new)
+
+    client.replace_label = fail_review_label  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="interrupted label transition"):
+        tracker.transition(
+            running,
+            TaskState.REVIEW,
+            "https://github.com/target/repo/pull/42",
+            pull_request_url="https://github.com/target/repo/pull/42",
+        )
+
+    assert client.comments == [
+        (
+            1,
+            ("AI-authored factory update: https://github.com/target/repo/pull/42"),
+        )
+    ]
+    assert client.issues[0].labels == ("factory:running",)
 
 
 def test_private_policy_rewrites_target_pr_urls_in_blocked_comments() -> None:

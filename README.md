@@ -98,9 +98,10 @@ task worktrees live under `$XDG_STATE_HOME/groundskeeper`
 (or `~/.local/state/groundskeeper`), so separate config worktrees share the
 same host coordination and recovery state. `GROUNDSKEEPER_STATE_HOME` is a
 narrow host/test override. Run exactly one scheduler host for each automation;
-multi-host scheduling is not supported. A tick reconciles running work first,
-then atomically reclaims deferred work, then claims new ready work. A successful
-no-work tick is safe. Before dispatch and after any worker return, Groundskeeper
+multi-host scheduling is not supported. A tick reconciles terminal review work
+first, then running work, then atomically reclaims deferred work, and finally
+claims new ready work. A successful no-work tick is safe. Before dispatch and
+after any worker return, Groundskeeper
 reconciles the accepted GitHub result: a policy-verified open draft PR in the
 target repository moves to review even if the worker reported a late failure. If accepted and violating
 exact target PRs coexist, the accepted draft wins; otherwise a non-draft, closed,
@@ -176,8 +177,9 @@ seconds); GitHub CLI operations have fixed 30-second timeouts. After a timeout,
 Groundskeeper reconciles the same accepted GitHub result first; without one, it
 blocks the claimed issue with the command error and releases the host lock for retry.
 If a process exits after claiming an issue, the next tick resumes that session
-and reconciles GitHub state. Issue discovery requests ready, running, and
-deferred labels server-side and is bounded at 1,000 open issues per state.
+and reconciles GitHub state. Issue discovery requests ready, running, deferred,
+review, and open closed-checkpoint labels server-side and is bounded at 1,000
+issues per state.
 Pull request reconciliation inspects either the exact source issue's
 repository-qualified closing pull request references or the deterministic task
 branch and filters them to the configured target repository.
