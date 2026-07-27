@@ -709,7 +709,8 @@ Groundskeeper validates this policy and enforces the accepted-result
 postcondition: only an open draft pull request in the target repository reaches
 review. With <code>policy.link-source-issue: true</code>, Groundskeeper identifies that PR
 through GitHub's exact source-issue closing references. With it false,
-Groundskeeper identifies the PR through the deterministic automation branch.
+Groundskeeper identifies the PR through the deterministic configured task
+branch.
 It does not sandbox a user-authorized Pi process. An automation skill receives normalized
 <code>TASK_ID</code>, <code>TASK_TITLE</code>, <code>TASK_BODY</code>, <code>TASK_URL</code>, target <code>REPOSITORY</code>, typed
 <code>RECOVERY_CONTEXT</code>, <code>POLICY_CONCURRENCY</code>, <code>POLICY_OUTPUT</code>, <code>POLICY_MERGE</code>,
@@ -732,10 +733,12 @@ rendering is unchanged.</p>
 <code>link-source-issue: false</code> tells the worker not to link or mention the source
 queue issue in the target PR and changes reconciliation to the deterministic
 task branch, so it requires <code>target.checkout.mode: isolated-worktree</code> or
-<code>managed-worktree</code>. The other fields tell the worker whether factory-session identity
-and the Pi resume reference may appear in the target PR. Groundskeeper still
-provides those values in execution context for recovery and may record them on
-the source-side factory issue.</p>
+<code>managed-worktree</code>. Review transitions still record a clickable target PR on
+the source issue through GitHub's documented <code>redirect.github.com</code> host, which
+does not create a backlink on the target PR. The other fields tell the worker
+whether factory-session identity and the Pi resume reference may appear in the
+target PR. Groundskeeper still provides those values in execution context for
+recovery and may record them on the source-side factory issue.</p>
 <p>Every GitHub Issues automation task must begin with exactly these first two H2
 sections. The contract sections cannot contain comments or fenced examples:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="gu">## Factory Task</span>
@@ -777,6 +780,7 @@ below; every override must be a non-empty string and all five must be distinct:<
 <a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a><span class="w">    </span><span class="nt">mode</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">isolated-worktree</span>
 <a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a><span class="w">    </span><span class="nt">base-ref</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">origin/main</span>
 <a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a><span class="w">    </span><span class="nt">refresh</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">fetch</span>
+<a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a><span class="w">    </span><span class="nt">branch-prefix</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">changes/task</span>
 </code></pre></div>
 <p>When <code>checkout</code> is omitted, <code>mode: existing</code> preserves the original behavior
 and Pi runs in <code>repository-path</code>. Both managed modes require an explicit
@@ -784,13 +788,20 @@ and Pi runs in <code>repository-path</code>. Both managed modes require an expli
 creates a deterministic task worktree under the host state directory.
 <code>mode: managed-worktree</code> instead reuses <code>repository-path</code> itself. That path must
 be a linked worktree, initially clean and detached or already on a
-<code>groundskeeper/task-*</code> branch. A dirty task branch may be resumed, but
-Groundskeeper refuses to switch away from it. Primary checkouts and ordinary
-local branches are rejected. This mode is useful for large repositories whose
-disposable linked worktree already shares a populated local object store and
-working tree. Its <code>base-ref</code> must be a stable named ref such as <code>origin/main</code> or
-a full commit SHA. Checkout-relative expressions and Groundskeeper task refs are
-rejected because the managed worktree moves between task branches.</p>
+configured task branch (<code>groundskeeper/task-*</code> by default). A dirty task branch
+may be resumed, but Groundskeeper refuses to switch away from it. Primary
+checkouts and ordinary local branches are rejected. This mode is useful for
+large repositories whose disposable linked worktree already shares a populated
+local object store and working tree. Its <code>base-ref</code> must be a stable named ref
+such as <code>origin/main</code> or a full commit SHA. Checkout-relative expressions and
+configured task refs are rejected because the managed worktree moves between
+task branches.</p>
+<p><code>branch-prefix</code> defaults to <code>groundskeeper/task</code> and must remain stable while
+tasks are running, deferred, or awaiting review. Changing it is an explicit
+cutover: finish or close active task pull requests, preserve any worktree
+changes, and leave a managed worktree clean and detached before applying the
+new configuration. Groundskeeper does not search or resume branches under old
+prefixes.</p>
 <p><code>refresh: none</code> resolves the locally available ref without network mutation.
 <code>refresh: fetch</code> requires an <code>origin/*</code> base and, for a live tick only, fetches
 that exact branch under the repository lock before tracker access. After claim,
@@ -812,7 +823,7 @@ Quarantine preserves any files materialized before interruption.</p>
 terminal transition so draft-PR review and deterministic recovery never lose
 local state. Groundskeeper currently performs no automatic garbage collection.
 Operators may remove a task worktree with normal <code>git worktree remove</code> and then
-delete its <code>groundskeeper/task-*</code> branch and <code>refs/groundskeeper/bases/*</code> ref
+delete its configured task branch and <code>refs/groundskeeper/bases/*</code> ref
 only after the task and pull request no longer need recovery. Automated,
 lock-protected retention policy remains future work.</p>
 <h3 id="host-scheduler-execution-source">Host scheduler execution source<a class="headerlink" href="#host-scheduler-execution-source" title="Permanent link">&para;</a></h3>
