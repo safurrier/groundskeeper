@@ -1250,8 +1250,8 @@ class TestAutomationE2E:
             "running->deferred",
             "comment",
             "deferred->running",
-            "running->review",
             "comment",
+            "running->review",
         ]
         pi_calls = pi_log.read_text()
         assert pi_calls.count("--session-id ") == 3
@@ -1269,7 +1269,7 @@ class TestAutomationE2E:
         assert json.loads(second.stdout)["data"]["pull_request_url"].endswith("/pull/9")
 
         mutations = gh_log.read_text().splitlines()
-        assert mutations == ["ready->running", "running->review", "comment"]
+        assert mutations == ["ready->running", "comment", "running->review"]
         pi_log_text = pi_log.read_text()
         pi_calls = [
             line
