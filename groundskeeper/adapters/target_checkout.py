@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 from groundskeeper.adapters.process import ProcessClient
 from groundskeeper.domain.automation import (
     AutomationTask,
-    automation_task_identity,
+    automation_task_branch,
     canonical_github_repository,
 )
 from groundskeeper.domain.config import AutomationCheckout
@@ -76,7 +76,7 @@ class TargetCheckoutManager:
         """Return a nonmutating reason this task cannot use the managed target."""
         if self._checkout.mode != "managed-worktree":
             return None
-        branch_ref = f"refs/heads/{_task_branch(task)}"
+        branch_ref = f"refs/heads/{automation_task_branch(task)}"
         current_branch = _managed_worktree_branch(self._process, self._repository_path)
         status = self._process.run(
             ("git", "status", "--porcelain"),
@@ -107,7 +107,7 @@ class TargetCheckoutManager:
                 "isolated-worktree checkout has no resolved candidate base"
             )
 
-        branch = _task_branch(task)
+        branch = automation_task_branch(task)
         task_key = branch.removeprefix("groundskeeper/task-")
         target_key = hashlib.sha256(
             (
@@ -344,14 +344,6 @@ def _repository_from_remote(remote: str) -> str:
         raise TargetCheckoutError(
             "target checkout origin does not contain a canonical owner/repo identity"
         ) from error
-
-
-def _task_branch(task: AutomationTask) -> str:
-    """Return the deterministic local branch for one source task."""
-    task_key = hashlib.sha256(
-        automation_task_identity(task).encode("utf-8")
-    ).hexdigest()[:16]
-    return f"groundskeeper/task-{task_key}"
 
 
 def validate_target_checkout(

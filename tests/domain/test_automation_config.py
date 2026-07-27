@@ -47,6 +47,58 @@ def test_parses_explicit_source_and_target_automation() -> None:
     assert item.runner.approval == "allow"
     assert item.runner.session == "deterministic"
     assert item.runner.timeout_seconds == 7200
+    assert item.policy.link_source_issue is True
+    assert item.policy.include_factory_session is True
+    assert item.policy.include_pi_resume is True
+
+
+def test_parses_explicit_public_handoff_policy() -> None:
+    config = _valid_automation_config()
+    config["automations"]["daily"]["target"]["checkout"] = {  # type: ignore[index]
+        "mode": "isolated-worktree",
+        "base-ref": "origin/main",
+        "refresh": "fetch",
+    }
+    config["automations"]["daily"]["policy"].update(  # type: ignore[index,union-attr]
+        {
+            "link-source-issue": False,
+            "include-factory-session": False,
+            "include-pi-resume": False,
+        }
+    )
+
+    policy = get_automations(config)[0].policy
+
+    assert policy.link_source_issue is False
+    assert policy.include_factory_session is False
+    assert policy.include_pi_resume is False
+
+
+def test_private_handoff_requires_deterministic_checkout() -> None:
+    config = _valid_automation_config()
+    config["automations"]["daily"]["policy"]["link-source-issue"] = False  # type: ignore[index]
+
+    with pytest.raises(
+        ConfigError,
+        match=r"isolated-worktree or managed-worktree.*link-source-issue is false",
+    ):
+        get_automations(config)
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "link-source-issue",
+        "include-factory-session",
+        "include-pi-resume",
+    ],
+)
+def test_public_handoff_policy_requires_boolean(key: str) -> None:
+    config = _valid_automation_config()
+    config["automations"]["daily"]["policy"][key] = "false"  # type: ignore[index]
+
+    with pytest.raises(ConfigError, match=rf"boolean policy\.{key}"):
+        get_automations(config)
 
 
 def test_parses_isolated_worktree_checkout_policy() -> None:

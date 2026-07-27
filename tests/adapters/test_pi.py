@@ -142,6 +142,9 @@ def test_pi_runner_renders_normalized_task_context_with_typed_settings() -> None
     assert client.settings.timeout_seconds == 7200
     assert "POLICY_OUTPUT: draft-pr" in client.prompt
     assert "POLICY_MERGE: never" in client.prompt
+    assert "POLICY_LINK_SOURCE_ISSUE: true" in client.prompt
+    assert "POLICY_INCLUDE_FACTORY_SESSION: true" in client.prompt
+    assert "POLICY_INCLUDE_PI_RESUME: true" in client.prompt
     assert f"FACTORY_SESSION_ID: {client.settings.session_id}" in client.prompt
     assert "FACTORY_SESSION_NAME: gk-source-queue-3-to-target-repo" in client.prompt
     assert (
@@ -199,6 +202,45 @@ def test_same_repository_task_renders_short_closing_reference() -> None:
     _runner(client).run(_admitted(task))
 
     assert "FACTORY_CLOSING_REFERENCE: #3" in client.prompt
+
+
+def test_public_handoff_policy_omits_closing_reference() -> None:
+    policy = AutomationPolicy(
+        link_source_issue=False,
+        include_factory_session=False,
+        include_pi_resume=False,
+    )
+    renderer = AutomationSkillRenderer(_skill(), policy, AutomationCheckout())
+    task = AutomationTask(
+        "github",
+        "Fix it",
+        "Acceptance",
+        "https://issue/3",
+        "alex",
+        GitHubIssueIdentity("source/queue", 3),
+        "target/repo",
+        contract=_contract(),
+    )
+    settings = PiExecutionSettings(
+        session_id="session-id",
+        name="session-name",
+        timeout_seconds=7200,
+    )
+
+    prompt = renderer.render(
+        _admitted(task),
+        False,
+        settings,
+        TargetWorkspace(Path("/repos/dots"), None),
+    )
+
+    assert "POLICY_LINK_SOURCE_ISSUE: false" in prompt
+    assert "POLICY_INCLUDE_FACTORY_SESSION: false" in prompt
+    assert "POLICY_INCLUDE_PI_RESUME: false" in prompt
+    assert "FACTORY_CLOSING_REFERENCE:" not in prompt
+    assert "FACTORY_SESSION_ID: session-id" in prompt
+    assert "FACTORY_SESSION_NAME: session-name" in prompt
+    assert "FACTORY_RESUME_COMMAND: pi --session session-id" in prompt
 
 
 def test_admitted_task_rejects_mismatched_contract() -> None:

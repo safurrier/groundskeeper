@@ -107,14 +107,15 @@ Pi runner configuration accepts optional `timeout-seconds` (default: 7,200) for
 long-running tasks. GitHub CLI calls use a fixed 30-second timeout. Groundskeeper
 does not sandbox a user-authorized Pi process; it enforces its accepted-result
 postcondition by transitioning to review only for an open draft pull request in
-the target repository with the exact repository-qualified source issue closing
-reference. It queries the exact source issue's documented GraphQL
-`closedByPullRequestsReferences` connection, reads each pull request's repository
-identity, and filters to the configured target. It paginates that relevant
-connection and fails closed if its explicit page budget is exhausted. Before
-worker dispatch, an accepted exact open draft reaches review; otherwise an exact
-non-draft, closed, or merged target PR blocks. If accepted and violating target
-PRs coexist, the accepted open draft wins.
+the target repository. With `policy.link-source-issue: true`, it queries the
+exact source issue's documented GraphQL `closedByPullRequestsReferences`
+connection. With source linking disabled, it queries the deterministic
+Groundskeeper task branch; that mode requires an `isolated-worktree` or
+`managed-worktree` checkout. Both paths read repository identity, filter to the
+configured target, and fail closed on malformed results. Before worker
+dispatch, an accepted open draft reaches review; otherwise a non-draft, closed,
+or merged exact target PR blocks. If accepted and violating target PRs coexist,
+the accepted open draft wins.
 
 All automation JSON responses use the breaking v2 envelope:
 `{"version":2,"status":"...","data":{...},"exit_code":N}`. `list` and `show`

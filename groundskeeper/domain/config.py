@@ -166,6 +166,9 @@ class AutomationPolicy:
     concurrency: int = 1
     output: str = "draft-pr"
     merge: str = "never"
+    link_source_issue: bool = True
+    include_factory_session: bool = True
+    include_pi_resume: bool = True
 
 
 @dataclass(frozen=True)
@@ -527,7 +530,14 @@ def get_automations(config: Mapping[str, object]) -> list[Automation]:
         policy = _automation_mapping(policy, f"{entry_path}.policy")
         _reject_unknown_automation_keys(
             policy,
-            {"concurrency", "output", "merge"},
+            {
+                "concurrency",
+                "output",
+                "merge",
+                "link-source-issue",
+                "include-factory-session",
+                "include-pi-resume",
+            },
             f"{entry_path}.policy",
             {"concurency": "concurrency"},
         )
@@ -570,6 +580,22 @@ def get_automations(config: Mapping[str, object]) -> list[Automation]:
             raise ConfigError(f"Automation '{name}' requires policy.merge: never")
         if policy.get("output", "draft-pr") != "draft-pr":
             raise ConfigError(f"Automation '{name}' requires policy.output: draft-pr")
+        public_policy: dict[str, bool] = {}
+        for key in (
+            "link-source-issue",
+            "include-factory-session",
+            "include-pi-resume",
+        ):
+            value = policy.get(key, True)
+            if not isinstance(value, bool):
+                raise ConfigError(f"Automation '{name}' requires boolean policy.{key}")
+            public_policy[key] = value
+        if not public_policy["link-source-issue"] and checkout.mode == "existing":
+            raise ConfigError(
+                f"Automation '{name}' requires target.checkout.mode "
+                "isolated-worktree or managed-worktree when "
+                "policy.link-source-issue is false"
+            )
         labels = source.get("labels", {})
         labels = _automation_mapping(labels, f"{entry_path}.source.labels")
         label_defaults = {
@@ -615,7 +641,11 @@ def get_automations(config: Mapping[str, object]) -> list[Automation]:
                     checkout=checkout,
                 ),
                 runner=PiRunnerConfig(skill=skill, timeout_seconds=timeout_seconds),
-                policy=AutomationPolicy(),
+                policy=AutomationPolicy(
+                    link_source_issue=public_policy["link-source-issue"],
+                    include_factory_session=public_policy["include-factory-session"],
+                    include_pi_resume=public_policy["include-pi-resume"],
+                ),
             )
         )
     return automations

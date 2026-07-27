@@ -323,6 +323,14 @@ class TestAutomationE2E:
         assert shown_automation["runner"]["skill"] == "issue-implementation"
         assert shown_automation["source"]["repository"] == "source/queue"
         assert shown_automation["target"]["repository"] == "target/repo"
+        assert shown_automation["policy"] == {
+            "concurrency": 1,
+            "output": "draft-pr",
+            "merge": "never",
+            "link_source_issue": True,
+            "include_factory_session": True,
+            "include_pi_resume": True,
+        }
         validated_automation = json.loads(validated.stdout)["data"]["automations"][0]
         assert validated_automation["source"]["repository"] == "source/queue"
         assert validated_automation["target"]["repository"] == "target/repo"
@@ -360,6 +368,13 @@ class TestAutomationE2E:
             "base-ref": "origin/main",
             "refresh": "none",
         }
+        config["automations"]["daily"]["policy"].update(
+            {
+                "link-source-issue": False,
+                "include-factory-session": False,
+                "include-pi-resume": False,
+            }
+        )
         config_path.write_text(yaml.safe_dump(config, sort_keys=False))
 
         validated = run_gk(
@@ -374,6 +389,14 @@ class TestAutomationE2E:
             "mode": "isolated-worktree",
             "base_ref": "origin/main",
             "refresh": "none",
+        }
+        assert json.loads(validated.stdout)["data"]["automations"][0]["policy"] == {
+            "concurrency": 1,
+            "output": "draft-pr",
+            "merge": "never",
+            "link_source_issue": False,
+            "include_factory_session": False,
+            "include_pi_resume": False,
         }
 
     def test_live_tick_fetches_immutable_base_without_modifying_dirty_donor(

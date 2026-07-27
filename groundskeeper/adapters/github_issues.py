@@ -14,8 +14,9 @@ from groundskeeper.domain.automation import (
     GitHubIssueIdentity,
     PullRequestReconciliation,
     TaskState,
+    automation_task_branch,
 )
-from groundskeeper.domain.config import GitHubIssuesSource
+from groundskeeper.domain.config import AutomationPolicy, GitHubIssuesSource
 from groundskeeper.domain.task_contract import (
     DependencyState,
     FactoryTaskKind,
@@ -26,11 +27,16 @@ from groundskeeper.domain.task_contract import (
 
 class GitHubIssuesTracker:
     def __init__(
-        self, client: GhClient, source: GitHubIssuesSource, target_repository: str
+        self,
+        client: GhClient,
+        source: GitHubIssuesSource,
+        target_repository: str,
+        policy: AutomationPolicy,
     ) -> None:
         self._client = client
         self._source = source
         self._target_repository = target_repository
+        self._policy = policy
 
     def list_ready(self) -> list[AutomationTask]:
         return self._list_in_state(self._source.ready_label, TaskState.READY)
@@ -172,6 +178,10 @@ class GitHubIssuesTracker:
     def reconcile_pull_requests(
         self, task: AutomationTask
     ) -> PullRequestReconciliation:
+        if not self._policy.link_source_issue:
+            return self._client.reconcile_branch_pull_requests(
+                task.target_repository, automation_task_branch(task)
+            )
         return self._client.reconcile_pull_requests(
             task.target_repository, task.source_issue
         )

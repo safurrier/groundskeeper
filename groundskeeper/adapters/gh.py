@@ -18,6 +18,7 @@ from groundskeeper.domain.task_contract import DependencyState, GitHubDependency
 GH_QUERY_TIMEOUT_SECONDS = 30
 GH_MUTATION_TIMEOUT_SECONDS = 30
 GH_CLOSING_PULL_REQUEST_PAGE_LIMIT = 10
+GH_BRANCH_PULL_REQUEST_LIMIT = 100
 
 _ISSUE_CLOSING_PULL_REQUESTS_QUERY = """
 query($owner: String!, $name: String!, $number: Int!, $endCursor: String) {
@@ -316,6 +317,91 @@ class GhClient:
                 else:
                     policy_violation = f"Closing pull request is not open: {url}"
         return PullRequestReconciliation(accepted_url, policy_violation)
+
+    def reconcile_branch_pull_requests(
+        self, target_repository: str, branch: str
+    ) -> PullRequestReconciliation:
+        """Read target pull requests for one deterministic automation branch."""
+        canonical_github_repository(target_repository)
+        result = self._process.run(
+            (
+                "gh",
+                "pr",
+                "list",
+                "--repo",
+                target_repository,
+                "--head",
+                branch,
+                "--state",
+                "all",
+                "--limit",
+                str(GH_BRANCH_PULL_REQUEST_LIMIT),
+                "--json",
+                "url,isDraft,state,headRefName,headRepository",
+            ),
+            self._cwd,
+            timeout=GH_QUERY_TIMEOUT_SECONDS,
+        )
+        if not result.success:
+            raise GhError(
+                result.stderr.strip() or "failed to query branch pull requests"
+            )
+        raw = self._parse_json(result.stdout, "branch pull request query")
+        if not isinstance(raw, list):
+            raise GhError("gh pr list returned an unexpected JSON shape")
+        if len(raw) >= GH_BRANCH_PULL_REQUEST_LIMIT:
+            raise GhError(
+                "branch pull request query reached the supported result limit"
+            )
+
+        accepted_url: str | None = None
+        policy_violation: str | None = None
+        try:
+            pull_requests = [
+                self._parse_branch_pull_request(item)
+                for item in cast(list[object], raw)
+            ]
+        except (TypeError, ValueError) as error:
+            raise GhError("gh pr list returned incomplete pull request data") from error
+        for repository, url, is_draft, state, head_branch in pull_requests:
+            if repository.casefold() != target_repository.casefold():
+                continue
+            if head_branch != branch:
+                continue
+            if is_draft and state == "OPEN":
+                accepted_url = accepted_url or url
+                continue
+            if policy_violation is None:
+                if not is_draft:
+                    policy_violation = f"Branch pull request is not a draft: {url}"
+                else:
+                    policy_violation = f"Branch pull request is not open: {url}"
+        return PullRequestReconciliation(accepted_url, policy_violation)
+
+    @staticmethod
+    def _parse_branch_pull_request(
+        value: object,
+    ) -> tuple[str, str, bool, str, str]:
+        if not isinstance(value, dict):
+            raise TypeError
+        pr_data = cast(dict[str, object], value)
+        repository = pr_data.get("headRepository")
+        if not isinstance(repository, dict):
+            raise TypeError
+        name_with_owner = cast(dict[str, object], repository).get("nameWithOwner")
+        url = pr_data.get("url")
+        is_draft = pr_data.get("isDraft")
+        state = pr_data.get("state")
+        branch = pr_data.get("headRefName")
+        if (
+            not isinstance(name_with_owner, str)
+            or not isinstance(url, str)
+            or not isinstance(is_draft, bool)
+            or state not in {"OPEN", "CLOSED", "MERGED"}
+            or not isinstance(branch, str)
+        ):
+            raise TypeError
+        return name_with_owner, url, is_draft, cast(str, state), branch
 
     @staticmethod
     def _parse_closing_pull_request_page(
