@@ -101,10 +101,11 @@ class GitHubIssuesTracker:
             re.IGNORECASE,
         )
         prefix = "AI-authored factory update:"
-        trusted = {author.casefold() for author in self._source.trusted_authors}
+        automation_author = self._client.authenticated_login().casefold()
         for comment in reversed(issue.comments):
-            if comment.author.casefold() not in trusted or not comment.body.startswith(
-                prefix
+            if (
+                comment.author.casefold() != automation_author
+                or not comment.body.startswith(prefix)
             ):
                 continue
             matches = list(target_pull_request.finditer(comment.body))

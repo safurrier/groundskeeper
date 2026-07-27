@@ -73,6 +73,31 @@ class GhClient:
     def __init__(self, process: ProcessClient, cwd: Path) -> None:
         self._process = process
         self._cwd = cwd
+        self._authenticated_login: str | None = None
+
+    def authenticated_login(self) -> str:
+        """Return the GitHub actor that owns mutations for this client."""
+        if self._authenticated_login is not None:
+            return self._authenticated_login
+        result = self._process.run(
+            ("gh", "api", "user"),
+            self._cwd,
+            timeout=GH_QUERY_TIMEOUT_SECONDS,
+        )
+        if not result.success:
+            raise GhError(
+                result.stderr.strip() or "failed to resolve authenticated GitHub actor"
+            )
+        raw = self._parse_json(result.stdout, "authenticated user query")
+        if not isinstance(raw, dict):
+            raise GhError(
+                "gh authenticated user query returned an unexpected JSON shape"
+            )
+        login = cast(dict[str, object], raw).get("login")
+        if not isinstance(login, str) or not login:
+            raise GhError("gh authenticated user query returned incomplete user data")
+        self._authenticated_login = login
+        return login
 
     def list_issues(
         self,

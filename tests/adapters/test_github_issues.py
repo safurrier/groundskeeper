@@ -54,6 +54,10 @@ class FakeGhClient:
         self.review_pull_request_urls: list[str] = []
         self.closed: list[tuple[int, bool]] = []
         self.operations: list[str] = []
+        self.authenticated_user = "alex"
+
+    def authenticated_login(self) -> str:
+        return self.authenticated_user
 
     def list_issues(
         self,
@@ -260,6 +264,33 @@ def test_review_listing_ignores_untrusted_pr_comment() -> None:
     )
 
     assert tracker.list_review()[0].review_pull_request_url is None
+
+
+def test_review_listing_accepts_authenticated_bot_outside_task_authors() -> None:
+    client = FakeGhClient()
+    client.authenticated_user = "factory-bot"
+    client.issues[0] = replace(
+        client.issues[0],
+        labels=("factory:review",),
+        comments=(
+            GhComment(
+                "factory-bot",
+                "AI-authored factory update: https://github.com/target/repo/pull/42",
+            ),
+        ),
+    )
+    tracker = GitHubIssuesTracker(
+        client,
+        GitHubIssuesSource("source/queue", ("alex",)),
+        "target/repo",
+        AutomationPolicy(),
+        AutomationCheckout(),
+    )
+
+    assert (
+        tracker.list_review()[0].review_pull_request_url
+        == "https://github.com/target/repo/pull/42"
+    )
 
 
 @pytest.mark.parametrize(("state", "merged"), [("open", True), ("closed", False)])

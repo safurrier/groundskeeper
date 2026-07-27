@@ -346,6 +346,7 @@ class TestAutomationE2E:
             "#!/bin/sh\n"
             f"STATE=$(cat '{lifecycle}')\nLOG='{gh_log}'\n"
             'case "$*" in\n'
+            '  *"api user"*) printf \'%s\' \'{"login":"alex"}\' ;;\n'
             '  *"issue list"*"factory:review"*) '
             f"if [ \"$STATE\" = review ]; then printf '%s' '{review_issue}'; "
             "else printf '%s' '[]'; fi ;;\n"
@@ -444,6 +445,7 @@ class TestAutomationE2E:
             "#!/bin/sh\n"
             f"STATE=$(cat '{lifecycle}')\nLOG='{gh_log}'\n"
             'case "$*" in\n'
+            '  *"api user"*) printf \'%s\' \'{"login":"alex"}\' ;;\n'
             '  *"issue list"*"factory:review"*) '
             f"if [ \"$STATE\" = review ]; then printf '%s' '{review_issue}'; "
             "else printf '%s' '[]'; fi ;;\n"

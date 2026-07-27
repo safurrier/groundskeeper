@@ -94,6 +94,15 @@ def test_invalid_json_is_actionable() -> None:
         GhClient(FakeProcess("not json"), Path(".")).list_issues("me/repo", ())
 
 
+def test_authenticated_login_is_typed_and_cached() -> None:
+    process = FakeProcess('{"login":"factory-bot"}')
+    client = GhClient(process, Path("."))
+
+    assert client.authenticated_login() == "factory-bot"
+    assert client.authenticated_login() == "factory-bot"
+    assert process.argv_history == [("gh", "api", "user")]
+
+
 def test_issue_discovery_is_server_filtered_and_bounded() -> None:
     process = FakeProcess("[]")
     GhClient(process, Path(".")).list_issues("me/repo", ("factory:ready",))
