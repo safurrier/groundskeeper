@@ -843,13 +843,16 @@ from that working tree. External <code>--skill-path</code> directories and snaps
 symlinks that resolve outside the snapshot are rejected.</p>
 <p>When no names are supplied, <code>run-scheduled</code> uses all automations in declaration
 order. <code>daily</code> rotation changes the first automation by local calendar day;
-<code>fixed</code> preserves declaration order. Groundskeeper reserves quota before every
-mutating tick and refunds only a proven <code>no-work</code> or <code>not-claimed</code> result, so a
-crash cannot fail open. The schedule ID owns a non-overlap lock and strict daily
-ledger under the Groundskeeper state root. Preflight validates the pinned
+<code>fixed</code> preserves declaration order. Groundskeeper first drains terminal review
+reconciliation without quota, even when the daily worker quota is exhausted.
+Each automation remains eligible to dispatch ready work in the same invocation
+after that cleanup. It then reserves quota before every worker-capable tick and
+refunds a proven <code>no-work</code>, <code>not-claimed</code>, or already-reconciled <code>closed</code> result,
+so a crash cannot fail open. The schedule ID owns a non-overlap lock and strict
+daily ledger under the Groundskeeper state root. Preflight validates the pinned
 config, skills, Pi, and target checkouts before opening that ledger. The JSON
 result includes the execution ref, pinned commit, managed workspace, quota
-state, and each tick result.</p>
+state, and each reconciliation and tick result.</p>
 <p>The host adapter remains outside Groundskeeper: it chooses when to invoke the
 command and supplies secrets or a private Pi launcher. It should execute the
 installed <code>gk</code>, not a script from the donor repository.</p>
@@ -873,11 +876,12 @@ place complete definitions under <code>data.automations[]</code> and <code>data.
 returns <code>data.source</code>, <code>data.target</code>, its optional repository-qualified
 <code>data.task</code>, result detail, PR URL, and session handoff fields. Exit <code>0</code> means
 no work, review-ready work, deferred work, or a successful dry-run. In
-particular, <code>status: "deferred"</code> is a nonfatal scheduler result. Exit <code>2</code> is a
-configuration, command, tracker, or lock error; <code>4</code> is claim contention; and <code>5</code>
-is a blocked worker. Commands are noninteractive and ticks use a single-host
-advisory lock. Tick selection order is running, deferred, then ready; deferred
-work is claimed back to running before a recovery invocation.</p>
+particular, <code>status: "deferred"</code> and terminal <code>status: "closed"</code> are nonfatal
+scheduler results; dry-run may report <code>would-close</code>. Exit <code>2</code> is a configuration,
+command, tracker, or lock error; <code>4</code> is claim contention; and <code>5</code> is a blocked
+worker. Commands are noninteractive and ticks use a single-host advisory lock.
+Tick selection order is terminal review reconciliation, running, deferred, then
+ready; deferred work is claimed back to running before a recovery invocation.</p>
 <h2 id="gk-init"><code>gk init</code><a class="headerlink" href="#gk-init" title="Permanent link">&para;</a></h2>
 <p>Initialize Groundskeeper in the current project.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>gk<span class="w"> </span>init<span class="w"> </span><span class="o">[</span>--non-interactive<span class="o">]</span>

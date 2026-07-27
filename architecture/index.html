@@ -729,28 +729,33 @@ adapters provide typed semantic operations and bounded timeouts above it.</p>
 <a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>  → validation/dry-run: prove target identity and resolve the optional base without donor mutation
 <a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>  → live tick: acquire stable source-admission and target-workspace host locks
 <a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>  → live tick: prove target identity, optionally fetch the exact origin branch, and freeze its commit SHA
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>  → reconcile running issues before deferred work before ready work
-<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>  → parse one exact Factory Task + Dependencies contract and resolve dependency state
-<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>  → block malformed, tracking, inaccessible, unresolved, or closed-unmerged dependency work before Pi
-<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>  → atomically claim at most one admitted trusted deferred or ready task
-<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>  → create or reuse the deterministic task branch/worktree from its pinned original base
-<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>  → normalize the repository-qualified source issue and explicit target identity
-<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>  → render configured skill + typed closing/task-contract/checkout/recovery/policy/session context
-<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>  → require POSIX process-group isolation
-<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>  → run Pi in the task worktree with a deterministic session keyed by source + issue + target
-<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a>      stdout + stderr → separately preserved and tee&#39;d to live scheduler logs
-<a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a>      stdout → PR URL parsing + strict public blocker marker extraction
-<a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a>      stderr → transient/durable provider failure classification
-<a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a>  → reconcile GitHub as the durable result authority
-<a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a>      exact source issue&#39;s closedByPullRequestsReferences filtered to target repository
-<a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a>      accepted open target draft PR → review (wins if a violating PR also exists)
-<a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a>      otherwise non-draft, closed, or merged target closing PR → blocked policy violation
-<a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a>      explicit closing-PR page exhaustion → indeterminate error without lifecycle mutation
-<a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a>      no accepted PR + explicit transient provider exhaustion → deferred
-<a id="__codelineno-1-25" name="__codelineno-1-25" href="#__codelineno-1-25"></a>      no accepted PR + durable/ordinary worker failure → blocked worker error
-<a id="__codelineno-1-26" name="__codelineno-1-26" href="#__codelineno-1-26"></a>      valid public blocker marker → bounded summary + next action in issue comment
-<a id="__codelineno-1-27" name="__codelineno-1-27" href="#__codelineno-1-27"></a>      arbitrary worker stdout → local logs only
-<a id="__codelineno-1-28" name="__codelineno-1-28" href="#__codelineno-1-28"></a>  → expose session id, stable name, and resume command in JSON + issue comment
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>  → reconcile terminal review PRs before dispatch quota
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>      exact merged target PR → retain closed label + close source as completed
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>      exact closed-unmerged target PR → retain closed label + close source as not planned
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>      open or missing evidence → preserve review state
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>      open closed-labeled issue → resume an interrupted terminal mutation
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>  → reconcile running issues before deferred work before ready work
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>  → parse one exact Factory Task + Dependencies contract and resolve dependency state
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>  → block malformed, tracking, inaccessible, unresolved, or closed-unmerged dependency work before Pi
+<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>  → atomically claim at most one admitted trusted deferred or ready task
+<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a>  → create or reuse the deterministic task branch/worktree from its pinned original base
+<a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a>  → normalize the repository-qualified source issue and explicit target identity
+<a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a>  → render configured skill + typed closing/task-contract/checkout/recovery/policy/session context
+<a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a>  → require POSIX process-group isolation
+<a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a>  → run Pi in the task worktree with a deterministic session keyed by source + issue + target
+<a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a>      stdout + stderr → separately preserved and tee&#39;d to live scheduler logs
+<a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a>      stdout → PR URL parsing + strict public blocker marker extraction
+<a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a>      stderr → transient/durable provider failure classification
+<a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a>  → reconcile GitHub as the durable result authority
+<a id="__codelineno-1-25" name="__codelineno-1-25" href="#__codelineno-1-25"></a>      exact source issue&#39;s closedByPullRequestsReferences filtered to target repository
+<a id="__codelineno-1-26" name="__codelineno-1-26" href="#__codelineno-1-26"></a>      accepted open target draft PR → review (wins if a violating PR also exists)
+<a id="__codelineno-1-27" name="__codelineno-1-27" href="#__codelineno-1-27"></a>      otherwise non-draft, closed, or merged target closing PR → blocked policy violation
+<a id="__codelineno-1-28" name="__codelineno-1-28" href="#__codelineno-1-28"></a>      explicit closing-PR page exhaustion → indeterminate error without lifecycle mutation
+<a id="__codelineno-1-29" name="__codelineno-1-29" href="#__codelineno-1-29"></a>      no accepted PR + explicit transient provider exhaustion → deferred
+<a id="__codelineno-1-30" name="__codelineno-1-30" href="#__codelineno-1-30"></a>      no accepted PR + durable/ordinary worker failure → blocked worker error
+<a id="__codelineno-1-31" name="__codelineno-1-31" href="#__codelineno-1-31"></a>      valid public blocker marker → bounded summary + next action in issue comment
+<a id="__codelineno-1-32" name="__codelineno-1-32" href="#__codelineno-1-32"></a>      arbitrary worker stdout → local logs only
+<a id="__codelineno-1-33" name="__codelineno-1-33" href="#__codelineno-1-33"></a>  → expose session id, stable name, and resume command in JSON + issue comment
 </code></pre></div>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>ready ──claim──&gt; running ──accepted draft PR──&gt; review
 <a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>                   │
@@ -758,10 +763,32 @@ adapters provide typed semantic operations and bounded timeouts above it.</p>
 <a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>                   └──auth/model/policy/worker/timeout────────&gt; blocked
 <a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>
 <a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>deferred ──next tick claim + recovery──&gt; running
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>review ──merged target PR──────────────&gt; closed + issue completed
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>       └─closed target PR without merge──&gt; closed + issue not planned
 </code></pre></div>
 <p>Deferred claims return the issue to <code>running</code> before Pi resumes the same UUIDv5
 session. A repeat transient failure returns it to <code>deferred</code>; a later accepted
 draft PR reaches <code>review</code>.</p>
+<p>The retained <code>closed</code> label is both the terminal ledger state and the recovery
+checkpoint for a partial label/issue-close mutation. Scheduled review
+reconciliation is quota-free and runs even when no worker attempt remains.
+The trusted factory review comment records the exact accepted target PR URL;
+terminal queries match that URL rather than selecting another PR associated
+with the same source issue or deterministic branch.
+Task admission and lifecycle-comment identity are separate authorization seams:
+<code>trusted-authors</code> admits source issues, while terminal reconciliation accepts a
+review marker only from <code>automation-authors</code>. Groundskeeper also refuses to
+write a review marker unless the currently authenticated GitHub actor is in
+that list. Keep the prior and replacement accounts configured together during
+a credential migration so historical markers remain recognizable. A marker
+from any other actor is reported as an error rather than silently ignored.
+Once an authorized marker admits a task to review, later changes to
+<code>trusted-authors</code> do not strand its terminal reconciliation. The review comment
+is written before the review label so an interrupted transition remains
+recoverable.
+Retry uses a new source issue because one source identity deterministically owns
+its branch, target pull request, and Pi session. Query errors fail without a
+lifecycle mutation.</p>
 <p>The source repository owns discovery, admission, dependencies, labels, comments,
 and lifecycle. The target checkout module owns donor validation and refresh,
 immutable task-base pinning, deterministic branch/worktree recovery, and Pi cwd.
