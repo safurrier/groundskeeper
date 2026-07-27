@@ -43,6 +43,7 @@ def test_parses_explicit_source_and_target_automation() -> None:
     assert item.target.checkout.mode == "existing"
     assert item.target.checkout.base_ref is None
     assert item.target.checkout.refresh == "none"
+    assert item.target.checkout.branch_prefix == "groundskeeper/task"
     assert item.runner.skill == "issue-implementation"
     assert item.runner.approval == "allow"
     assert item.runner.session == "deterministic"
@@ -58,6 +59,7 @@ def test_parses_explicit_public_handoff_policy() -> None:
         "mode": "isolated-worktree",
         "base-ref": "origin/main",
         "refresh": "fetch",
+        "branch-prefix": "changes/task",
     }
     config["automations"]["daily"]["policy"].update(  # type: ignore[index,union-attr]
         {
@@ -107,6 +109,7 @@ def test_parses_isolated_worktree_checkout_policy() -> None:
         "mode": "isolated-worktree",
         "base-ref": "origin/main",
         "refresh": "fetch",
+        "branch-prefix": "changes/task",
     }
 
     checkout = get_automations(config)[0].target.checkout
@@ -114,6 +117,7 @@ def test_parses_isolated_worktree_checkout_policy() -> None:
     assert checkout.mode == "isolated-worktree"
     assert checkout.base_ref == "origin/main"
     assert checkout.refresh == "fetch"
+    assert checkout.branch_prefix == "changes/task"
 
 
 def test_parses_managed_worktree_checkout_policy() -> None:
@@ -138,6 +142,7 @@ def test_parses_managed_worktree_checkout_policy() -> None:
         (None, "target.checkout must be a mapping"),
         ({"mode": "unknown"}, "checkout.mode"),
         ({"mode": "existing", "base-ref": "origin/main"}, "only valid"),
+        ({"mode": "existing", "branch-prefix": "changes/task"}, "only valid"),
         ({"mode": "isolated-worktree"}, "checkout.base-ref"),
         *[
             (
@@ -174,6 +179,27 @@ def test_parses_managed_worktree_checkout_policy() -> None:
             },
             "checkout.*unknown key",
         ),
+        *[
+            (
+                {
+                    "mode": "isolated-worktree",
+                    "base-ref": "origin/main",
+                    "branch-prefix": branch_prefix,
+                },
+                "branch-prefix",
+            )
+            for branch_prefix in (
+                "",
+                "/changes/task",
+                "changes/task/",
+                "changes//task",
+                "changes/../task",
+                "changes/task.lock",
+                "changes task",
+                "changes~task",
+                "changes/task\x7f",
+            )
+        ],
     ],
 )
 def test_rejects_invalid_checkout_policy(

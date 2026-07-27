@@ -367,6 +367,7 @@ class TestAutomationE2E:
             "mode": "isolated-worktree",
             "base-ref": "origin/main",
             "refresh": "none",
+            "branch-prefix": "changes/task",
         }
         config["automations"]["daily"]["policy"].update(
             {
@@ -389,6 +390,7 @@ class TestAutomationE2E:
             "mode": "isolated-worktree",
             "base_ref": "origin/main",
             "refresh": "none",
+            "branch_prefix": "changes/task",
         }
         assert json.loads(validated.stdout)["data"]["automations"][0]["policy"] == {
             "concurrency": 1,

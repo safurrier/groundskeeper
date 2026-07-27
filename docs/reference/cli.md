@@ -110,7 +110,7 @@ postcondition by transitioning to review only for an open draft pull request in
 the target repository. With `policy.link-source-issue: true`, it queries the
 exact source issue's documented GraphQL `closedByPullRequestsReferences`
 connection. With source linking disabled, it queries the deterministic
-Groundskeeper task branch; that mode requires an `isolated-worktree` or
+configured task branch; that mode requires an `isolated-worktree` or
 `managed-worktree` checkout. Both paths read repository identity, filter to the
 configured target, and fail closed on malformed results. Before worker
 dispatch, an accepted open draft reaches review; otherwise a non-draft, closed,

@@ -216,6 +216,7 @@ def _automation_target_summary(item: Automation) -> dict[str, object]:
             "mode": item.target.checkout.mode,
             "base_ref": item.target.checkout.base_ref,
             "refresh": item.target.checkout.refresh,
+            "branch_prefix": item.target.checkout.branch_prefix,
         },
     }
 
@@ -502,6 +503,7 @@ def automation_inspect(ctx: click.Context, name: str, json_output: bool) -> None
             definition.source,
             definition.target.repository,
             definition.policy,
+            definition.target.checkout,
         )
         tasks = [
             *tracker.list_running(),
@@ -609,6 +611,7 @@ def _execute_automation_tick(
             definition.source,
             definition.target.repository,
             definition.policy,
+            definition.target.checkout,
         )
         service = AutomationService(tracker, runner)
         return definition, service.tick(definition, dry_run=True)
@@ -633,6 +636,7 @@ def _execute_automation_tick(
             definition.source,
             definition.target.repository,
             definition.policy,
+            definition.target.checkout,
         )
         service = AutomationService(tracker, runner)
         return definition, service.tick(definition, dry_run=False)

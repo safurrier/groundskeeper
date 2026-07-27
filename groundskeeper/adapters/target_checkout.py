@@ -12,6 +12,7 @@ from groundskeeper.adapters.process import ProcessClient
 from groundskeeper.domain.automation import (
     AutomationTask,
     automation_task_branch,
+    automation_task_key,
     canonical_github_repository,
 )
 from groundskeeper.domain.config import AutomationCheckout
@@ -76,7 +77,9 @@ class TargetCheckoutManager:
         """Return a nonmutating reason this task cannot use the managed target."""
         if self._checkout.mode != "managed-worktree":
             return None
-        branch_ref = f"refs/heads/{automation_task_branch(task)}"
+        branch_ref = (
+            f"refs/heads/{automation_task_branch(task, self._checkout.branch_prefix)}"
+        )
         current_branch = _managed_worktree_branch(self._process, self._repository_path)
         status = self._process.run(
             ("git", "status", "--porcelain"),
@@ -107,8 +110,8 @@ class TargetCheckoutManager:
                 "isolated-worktree checkout has no resolved candidate base"
             )
 
-        branch = automation_task_branch(task)
-        task_key = branch.removeprefix("groundskeeper/task-")
+        branch = automation_task_branch(task, self._checkout.branch_prefix)
+        task_key = automation_task_key(task)
         target_key = hashlib.sha256(
             (
                 f"{self._expected_repository.casefold()}\0"
@@ -182,7 +185,11 @@ class TargetCheckoutManager:
         self, branch: str, branch_ref: str, base_ref: str
     ) -> TargetWorkspace:
         """Create or resume a task branch in one explicit disposable worktree."""
-        _validate_managed_worktree(self._process, self._repository_path)
+        _validate_managed_worktree(
+            self._process,
+            self._repository_path,
+            branch_prefix=self._checkout.branch_prefix,
+        )
         candidate_base = self._candidate_base_sha
         if candidate_base is None:
             raise TargetCheckoutError("managed target has no resolved candidate base")
@@ -217,7 +224,10 @@ class TargetCheckoutManager:
         )
         self._run_or_raise(argv, "could not prepare the managed target workspace")
         _validate_managed_worktree(
-            self._process, self._repository_path, expected_branch_ref=branch_ref
+            self._process,
+            self._repository_path,
+            branch_prefix=self._checkout.branch_prefix,
+            expected_branch_ref=branch_ref,
         )
         return TargetWorkspace(self._repository_path, pinned_base)
 
@@ -356,7 +366,9 @@ def validate_target_checkout(
     checkout = checkout or AutomationCheckout()
     _validate_target_repository(process, repository_path, expected_repository)
     if checkout.mode == "managed-worktree":
-        _validate_managed_worktree(process, repository_path)
+        _validate_managed_worktree(
+            process, repository_path, branch_prefix=checkout.branch_prefix
+        )
     return _validate_base_ref(process, repository_path, checkout)
 
 
@@ -369,7 +381,9 @@ def prepare_target_checkout(
     """Refresh and prove a live isolated-worktree donor before tracker access."""
     _validate_target_repository(process, repository_path, expected_repository)
     if checkout.mode == "managed-worktree":
-        _validate_managed_worktree(process, repository_path)
+        _validate_managed_worktree(
+            process, repository_path, branch_prefix=checkout.branch_prefix
+        )
     if (
         checkout.mode in {"isolated-worktree", "managed-worktree"}
         and checkout.refresh == "fetch"
@@ -457,6 +471,7 @@ def _validate_managed_worktree(
     process: ProcessClient,
     repository_path: Path,
     *,
+    branch_prefix: str = "groundskeeper/task",
     expected_branch_ref: str | None = None,
 ) -> None:
     """Require a linked disposable worktree with a safe current branch."""
@@ -487,14 +502,15 @@ def _validate_managed_worktree(
             "managed target must be a linked disposable worktree, not the primary checkout"
         )
     branch_ref = _managed_worktree_branch(process, repository_path)
+    task_branch_prefix = f"refs/heads/{branch_prefix}-"
     if expected_branch_ref is not None:
         if branch_ref != expected_branch_ref:
             raise TargetCheckoutError(
                 "managed target is not on its deterministic task branch"
             )
-    elif branch_ref and not branch_ref.startswith("refs/heads/groundskeeper/task-"):
+    elif branch_ref and not branch_ref.startswith(task_branch_prefix):
         raise TargetCheckoutError(
-            "managed target must be detached or on a Groundskeeper task branch"
+            "managed target must be detached or on a configured task branch"
         )
     status = process.run(
         ("git", "status", "--porcelain"),
@@ -503,7 +519,7 @@ def _validate_managed_worktree(
     )
     if not status.success:
         raise TargetCheckoutError("could not inspect managed target worktree")
-    if status.stdout and not branch_ref.startswith("refs/heads/groundskeeper/task-"):
+    if status.stdout and not branch_ref.startswith(task_branch_prefix):
         raise TargetCheckoutError("managed target worktree must be clean")
 
 

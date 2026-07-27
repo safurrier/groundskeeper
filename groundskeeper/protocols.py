@@ -59,7 +59,12 @@ class Tracker(Protocol):
     def admit(self, task: AutomationTask) -> AdmissionResult: ...
     def claim(self, task: AutomationTask) -> ClaimResult: ...
     def transition(
-        self, task: AutomationTask, state: TaskState, detail: str = ""
+        self,
+        task: AutomationTask,
+        state: TaskState,
+        detail: str = "",
+        *,
+        pull_request_url: str | None = None,
     ) -> None: ...
     def reconcile_pull_requests(
         self, task: AutomationTask

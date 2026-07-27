@@ -82,12 +82,18 @@ def automation_task_identity(task: AutomationTask) -> str:
     )
 
 
-def automation_task_branch(task: AutomationTask) -> str:
+def automation_task_key(task: AutomationTask) -> str:
+    """Return the deterministic opaque key shared by task-owned Git state."""
+    return hashlib.sha256(automation_task_identity(task).encode("utf-8")).hexdigest()[
+        :16
+    ]
+
+
+def automation_task_branch(
+    task: AutomationTask, branch_prefix: str = "groundskeeper/task"
+) -> str:
     """Return the deterministic target branch used to identify one task PR."""
-    task_key = hashlib.sha256(
-        automation_task_identity(task).encode("utf-8")
-    ).hexdigest()[:16]
-    return f"groundskeeper/task-{task_key}"
+    return f"{branch_prefix}-{automation_task_key(task)}"
 
 
 class AdmissionState(str, Enum):
