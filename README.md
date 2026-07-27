@@ -20,12 +20,14 @@ automations:
       type: github-issues
       repository: example/work-factory
       trusted-authors: [maintainer]
+      automation-authors: [maintainer]
       labels:
         ready: factory:ready
         running: factory:running
         deferred: factory:deferred
         review: factory:review
         blocked: factory:blocked
+        closed: factory:closed
     target:
       repository: example/widgets
       repository-path: /Users/you/src/widgets
@@ -97,9 +99,10 @@ task worktrees live under `$XDG_STATE_HOME/groundskeeper`
 (or `~/.local/state/groundskeeper`), so separate config worktrees share the
 same host coordination and recovery state. `GROUNDSKEEPER_STATE_HOME` is a
 narrow host/test override. Run exactly one scheduler host for each automation;
-multi-host scheduling is not supported. A tick reconciles running work first,
-then atomically reclaims deferred work, then claims new ready work. A successful
-no-work tick is safe. Before dispatch and after any worker return, Groundskeeper
+multi-host scheduling is not supported. A tick reconciles terminal review work
+first, then running work, then atomically reclaims deferred work, and finally
+claims new ready work. A successful no-work tick is safe. Before dispatch and
+after any worker return, Groundskeeper
 reconciles the accepted GitHub result: a policy-verified open draft PR in the
 target repository moves to review even if the worker reported a late failure. If accepted and violating
 exact target PRs coexist, the accepted draft wins; otherwise a non-draft, closed,
@@ -144,7 +147,16 @@ factory:ready ──claim──> factory:running ──accepted draft PR──> 
                               └──durable failure/policy violation──> factory:blocked
 
 factory:deferred ──next tick claim/resume──> factory:running
+factory:review ──merged PR──────────────> factory:closed + issue completed
+               └─closed without merge──> factory:closed + issue not planned
 ```
+
+`factory:closed` is retained on the closed source issue as the terminal
+automation state. Reconciliation runs before worker quota, including when the
+daily dispatch quota is exhausted. A retry is a new source issue: source issue
+identity deterministically owns its target branch, pull request, and Pi session.
+Provision every configured lifecycle label in the source repository before
+rollout, including `factory:closed`; Groundskeeper does not create labels.
 
 Each source repository, issue number, and target repository tuple maps to a
 deterministic UUIDv5 Pi session and stable run name. Pi
@@ -166,8 +178,9 @@ seconds); GitHub CLI operations have fixed 30-second timeouts. After a timeout,
 Groundskeeper reconciles the same accepted GitHub result first; without one, it
 blocks the claimed issue with the command error and releases the host lock for retry.
 If a process exits after claiming an issue, the next tick resumes that session
-and reconciles GitHub state. Issue discovery requests ready, running, and
-deferred labels server-side and is bounded at 1,000 open issues per state.
+and reconciles GitHub state. Issue discovery requests ready, running, deferred,
+review, and open closed-checkpoint labels server-side and is bounded at 1,000
+issues per state.
 Pull request reconciliation inspects either the exact source issue's
 repository-qualified closing pull request references or the deterministic task
 branch and filters them to the configured target repository.

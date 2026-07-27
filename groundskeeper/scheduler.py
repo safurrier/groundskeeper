@@ -64,6 +64,7 @@ class ScheduledRun:
 
 PreflightScheduled = Callable[[Path, tuple[str, ...]], list[str]]
 TickScheduled = Callable[[Path, str], ScheduledTick]
+ReconcileScheduled = Callable[[Path, str], ScheduledTick | None]
 
 
 class ScheduledAutomationService:
@@ -79,6 +80,7 @@ class ScheduledAutomationService:
         *,
         preflight: PreflightScheduled,
         tick: TickScheduled,
+        reconcile: ReconcileScheduled | None = None,
     ) -> ScheduledRun:
         """Execute a request from one immutable source snapshot."""
         manager = ExecutionSourceManager(
@@ -111,6 +113,11 @@ class ScheduledAutomationService:
                         quota,
                         rotation=request.rotation,
                         tick=lambda name: tick(config_path, name),
+                        reconcile=(
+                            (lambda name: reconcile(config_path, name))
+                            if reconcile is not None
+                            else None
+                        ),
                     )
                     consumed = quota.consumed
         return ScheduledRun(request, source, consumed, tuple(runs))
@@ -135,13 +142,24 @@ def run_scheduled_automations(
     *,
     rotation: int,
     tick: Callable[[str], ScheduledTick],
+    reconcile: Callable[[str], ScheduledTick | None] | None = None,
 ) -> list[ScheduledTick]:
     """Run sequential ticks under one crash-safe shared daily quota."""
-    if not names or ledger.remaining <= 0:
+    if not names:
         return []
     offset = rotation % len(names)
     active = names[offset:] + names[:offset]
     results: list[ScheduledTick] = []
+    if reconcile is not None:
+        dispatchable: list[str] = []
+        for name in active:
+            while (result := reconcile(name)) is not None:
+                results.append(replace(result, consumed_attempt=False))
+                if result.status != "closed":
+                    break
+            else:
+                dispatchable.append(name)
+        active = dispatchable
 
     while active and ledger.remaining > 0:
         next_pass: list[str] = []
@@ -151,7 +169,7 @@ def run_scheduled_automations(
             ledger.consume()
             result = tick(name)
             reserved = True
-            if result.status in {"no-work", "not-claimed"}:
+            if result.status in {"no-work", "not-claimed", "closed"}:
                 ledger.refund()
                 reserved = False
             elif result.status in {"review", "deferred", "blocked"} and not isinstance(

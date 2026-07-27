@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import subprocess
+from datetime import date
 from pathlib import Path
 
 import yaml
@@ -15,14 +16,16 @@ from .conftest import requires_claude, requires_gk
 FACTORY_TASK_BODY = "## Factory Task\n\nSchema: 1\nKind: runnable\nMode: full\n\n## Dependencies\n\nNone"
 
 
-def _pull_request_graphql(*, draft: bool = True, include: bool = True) -> str:
+def _pull_request_graphql(
+    *, draft: bool = True, include: bool = True, state: str = "OPEN"
+) -> str:
     nodes: list[dict[str, object]] = []
     if include:
         nodes.append(
             {
                 "url": "https://github.com/target/repo/pull/9",
                 "isDraft": draft,
-                "state": "OPEN",
+                "state": state,
                 "repository": {"nameWithOwner": "target/repo"},
             }
         )
@@ -46,7 +49,11 @@ def _pull_request_graphql(*, draft: bool = True, include: bool = True) -> str:
     )
 
 
-def _issue_object_json(state: str, body: str = FACTORY_TASK_BODY) -> str:
+def _issue_object_json(
+    state: str,
+    body: str = FACTORY_TASK_BODY,
+    comments: list[dict[str, object]] | None = None,
+) -> str:
     return json.dumps(
         {
             "number": 7,
@@ -56,12 +63,13 @@ def _issue_object_json(state: str, body: str = FACTORY_TASK_BODY) -> str:
             "author": {"login": "alex"},
             "labels": [{"name": f"factory:{state}"}],
             "state": "open",
+            "comments": comments or [],
         }
     )
 
 
-def _issue_json(state: str) -> str:
-    return json.dumps([json.loads(_issue_object_json(state))])
+def _issue_json(state: str, comments: list[dict[str, object]] | None = None) -> str:
+    return json.dumps([json.loads(_issue_object_json(state, comments=comments))])
 
 
 def _factory_repo(tmp_path: Path, gh_output: str) -> tuple[Path, dict[str, str]]:
@@ -88,6 +96,7 @@ def _factory_repo(tmp_path: Path, gh_output: str) -> tuple[Path, dict[str, str]]
       type: github-issues
       repository: source/queue
       trusted-authors: [alex]
+      automation-authors: [alex]
     target:
       repository: target/repo
       repository-path: {repo}
@@ -125,6 +134,7 @@ def _factory_flow_repo(
     (binary_dir / "gh").write_text(
         "#!/bin/sh\n"
         'case "$*" in\n'
+        '  *"api user"*) printf \'%s\' \'{"login":"alex"}\' ;;\n'
         f"  *\"issue view\"*) printf '%s' '{issue_view}' ;;\n"
         f"  *\"issue list\"*\"factory:{state}\"*) printf '%s' '{issue}' ;;\n"
         "  *\"issue list\"*) printf '%s' '[]' ;;\n"
@@ -216,6 +226,7 @@ def _deferred_factory_repo(tmp_path: Path) -> tuple[Path, dict[str, str], Path, 
         "#!/bin/sh\n"
         f"STATE='{state}'\nLOG='{gh_log}'\nCURRENT=$(cat \"$STATE\")\n"
         'case "$*" in\n'
+        '  *"api user"*) printf \'%s\' \'{"login":"alex"}\' ;;\n'
         f"  *\"issue view\"*) printf '%s' '{issue_view}' ;;\n"
         '  *"issue list"*)\n'
         '    case "$*" in *"factory:$CURRENT"*) '
@@ -281,6 +292,7 @@ def _stateful_factory_repo(tmp_path: Path) -> tuple[Path, dict[str, str], Path, 
         "#!/bin/sh\n"
         f"STATE='{state}'\nLOG='{gh_log}'\nCURRENT=$(cat \"$STATE\")\n"
         'case "$*" in\n'
+        '  *"api user"*) printf \'%s\' \'{"login":"alex"}\' ;;\n'
         f"  *\"issue view\"*) printf '%s' '{issue_view}' ;;\n"
         '  *"issue list"*)\n'
         '    case "$*" in *"factory:$CURRENT"*) '
@@ -310,6 +322,268 @@ def _stateful_factory_repo(tmp_path: Path) -> tuple[Path, dict[str, str], Path, 
 
 @requires_gk
 class TestAutomationE2E:
+    def test_terminal_review_is_relabeled_and_closed_without_pi(
+        self, tmp_path: Path
+    ) -> None:
+        repo, env = _factory_repo(tmp_path, "[]")
+        binary_dir = tmp_path / "bin"
+        lifecycle = tmp_path / "issue-lifecycle"
+        lifecycle.write_text("review")
+        gh_log = tmp_path / "terminal-gh.log"
+        pi_log = tmp_path / "terminal-pi.log"
+        marker_comments = [
+            {
+                "author": {"login": "alex"},
+                "body": (
+                    "AI-authored factory update: https://github.com/target/repo/pull/9"
+                ),
+            }
+        ]
+        review_issue = _issue_json("review", comments=marker_comments)
+        review_view = _issue_object_json("review", comments=marker_comments)
+        closed_view = _issue_object_json("closed", comments=marker_comments)
+        merged_pull_request = _pull_request_graphql(state="MERGED")
+        (binary_dir / "gh").write_text(
+            "#!/bin/sh\n"
+            f"STATE=$(cat '{lifecycle}')\nLOG='{gh_log}'\n"
+            'case "$*" in\n'
+            '  *"api user"*) printf \'%s\' \'{"login":"alex"}\' ;;\n'
+            '  *"issue list"*"factory:review"*) '
+            f"if [ \"$STATE\" = review ]; then printf '%s' '{review_issue}'; "
+            "else printf '%s' '[]'; fi ;;\n"
+            "  *\"issue list\"*\"factory:closed\"*) printf '%s' '[]' ;;\n"
+            '  *"issue view"*) '
+            f"if [ \"$STATE\" = review ]; then printf '%s' '{review_view}'; "
+            f"else printf '%s' '{closed_view}'; fi ;;\n"
+            f"  *\"api graphql\"*) printf '%s' '{merged_pull_request}' ;;\n"
+            '  *"issue edit"*"factory:review"*"factory:closed"*) '
+            f"echo relabeled >> \"$LOG\"; echo closed > '{lifecycle}' ;;\n"
+            '  *"issue close"*"--reason completed"*) echo completed >> "$LOG" ;;\n'
+            "  *) printf '%s' '' ;;\n"
+            "esac\n"
+        )
+        pi = binary_dir / "pi"
+        pi.write_text(f"#!/bin/sh\necho launched >> '{pi_log}'\nexit 1\n")
+        pi.chmod(0o755)
+
+        result = run_gk("automation", "tick", "daily", "--json", cwd=repo, env=env)
+
+        assert result.returncode == 0, result.stderr
+        payload = json.loads(result.stdout)
+        assert payload["status"] == "closed"
+        assert payload["data"]["task"]["state"] == "closed"
+        assert (
+            payload["data"]["pull_request_url"]
+            == "https://github.com/target/repo/pull/9"
+        )
+        assert gh_log.read_text().splitlines() == ["relabeled", "completed"]
+        assert not pi_log.exists()
+
+    def test_review_label_retry_reuses_pr_without_redispatching_pi(
+        self, tmp_path: Path
+    ) -> None:
+        repo, env = _factory_repo(tmp_path, "[]")
+        binary_dir = tmp_path / "bin"
+        lifecycle = tmp_path / "retry-issue-lifecycle"
+        lifecycle.write_text("ready")
+        failed_once = tmp_path / "review-label-failed"
+        pr_created = tmp_path / "retry-pr-created"
+        gh_log = tmp_path / "retry-gh.log"
+        pi_log = tmp_path / "retry-pi.log"
+        issue_view = _issue_object_json("running")
+        pull_requests = _pull_request_graphql()
+        no_pull_requests = _pull_request_graphql(include=False)
+        issue_prefix = json.dumps(
+            [
+                {
+                    "number": 7,
+                    "title": "Do work",
+                    "body": FACTORY_TASK_BODY,
+                    "url": "https://github.com/source/queue/issues/7",
+                    "author": {"login": "alex"},
+                    "state": "open",
+                    "labels": [{"name": "factory:"}],
+                }
+            ]
+        )[:-5]
+        (binary_dir / "gh").write_text(
+            "#!/bin/sh\n"
+            f"STATE='{lifecycle}'\nLOG='{gh_log}'\nCURRENT=$(cat \"$STATE\")\n"
+            'case "$*" in\n'
+            '  *"api user"*) printf \'%s\' \'{"login":"alex"}\' ;;\n'
+            f"  *\"issue view\"*) printf '%s' '{issue_view}' ;;\n"
+            '  *"issue list"*)\n'
+            '    case "$*" in *"factory:$CURRENT"*) '
+            f"printf '%s%s%s' '{issue_prefix}' \"$CURRENT\" '"
+            + '"}]}]'
+            + "' ;; *) printf '%s' '[]' ;; esac ;;\n"
+            '  *"issue edit"*"factory:ready"*"factory:running"*) '
+            'echo \'ready->running\' >> "$LOG"; echo running > "$STATE" ;;\n'
+            '  *"issue comment"*) echo comment >> "$LOG" ;;\n'
+            '  *"issue edit"*"factory:running"*"factory:review"*) '
+            f"if [ ! -f '{failed_once}' ]; then "
+            f"touch '{failed_once}'; echo label-failed >> \"$LOG\"; exit 1; "
+            'else echo \'running->review\' >> "$LOG"; echo review > "$STATE"; fi ;;\n'
+            f"  *\"api graphql\"*) if [ -f '{pr_created}' ]; then "
+            f"printf '%s' '{pull_requests}'; "
+            f"else printf '%s' '{no_pull_requests}'; fi ;;\n"
+            "  *) printf '%s' '' ;;\n"
+            "esac\n"
+        )
+        pi = binary_dir / "pi"
+        pi.write_text(
+            "#!/bin/sh\n"
+            f"echo launched >> '{pi_log}'\n"
+            f"touch '{pr_created}'\n"
+            "printf '%s' 'https://github.com/target/repo/pull/9'\n"
+        )
+        pi.chmod(0o755)
+
+        first = run_gk("automation", "tick", "daily", "--json", cwd=repo, env=env)
+        second = run_gk("automation", "tick", "daily", "--json", cwd=repo, env=env)
+
+        assert first.returncode != 0
+        assert second.returncode == 0, second.stderr
+        payload = json.loads(second.stdout)
+        assert payload["status"] == "review"
+        assert (
+            payload["data"]["pull_request_url"]
+            == "https://github.com/target/repo/pull/9"
+        )
+        assert pi_log.read_text().splitlines() == ["launched"]
+        assert gh_log.read_text().splitlines() == [
+            "ready->running",
+            "comment",
+            "label-failed",
+            "comment",
+            "running->review",
+        ]
+
+    def test_scheduled_terminal_reconciliation_runs_with_exhausted_quota(
+        self, tmp_path: Path
+    ) -> None:
+        repo, env = _factory_repo(tmp_path, "[]")
+        state_home = tmp_path / "state"
+        env["GROUNDSKEEPER_STATE_HOME"] = str(state_home)
+        remote = tmp_path / "source.git"
+        real_git = shutil.which("git")
+        assert real_git is not None
+        subprocess.run([real_git, "init", "--bare", "-q", remote], check=True)
+        subprocess.run([real_git, "switch", "-c", "main"], cwd=repo, check=True)
+        subprocess.run([real_git, "add", "."], cwd=repo, check=True)
+        subprocess.run(
+            [
+                real_git,
+                "-c",
+                "user.name=Groundskeeper Test",
+                "-c",
+                "user.email=groundskeeper@example.com",
+                "commit",
+                "-qm",
+                "scheduled source",
+            ],
+            cwd=repo,
+            check=True,
+        )
+        subprocess.run(
+            [real_git, "remote", "set-url", "origin", remote], cwd=repo, check=True
+        )
+        subprocess.run(
+            [real_git, "push", "-q", "-u", "origin", "main"], cwd=repo, check=True
+        )
+
+        binary_dir = tmp_path / "bin"
+        git_wrapper = binary_dir / "git"
+        git_wrapper.write_text(
+            "#!/bin/sh\n"
+            'if [ "$*" = "remote get-url origin" ]; then\n'
+            "  printf '%s\\n' 'git@github.com:target/repo.git'\n"
+            "  exit 0\n"
+            "fi\n"
+            f"exec '{real_git}' \"$@\"\n"
+        )
+        git_wrapper.chmod(0o755)
+        lifecycle = tmp_path / "scheduled-issue-lifecycle"
+        lifecycle.write_text("review")
+        gh_log = tmp_path / "scheduled-terminal-gh.log"
+        pi_log = tmp_path / "scheduled-terminal-pi.log"
+        marker_comments = [
+            {
+                "author": {"login": "alex"},
+                "body": (
+                    "AI-authored factory update: https://github.com/target/repo/pull/9"
+                ),
+            }
+        ]
+        review_issue = _issue_json("review", comments=marker_comments)
+        review_view = _issue_object_json("review", comments=marker_comments)
+        closed_view = _issue_object_json("closed", comments=marker_comments)
+        merged_pull_request = _pull_request_graphql(state="MERGED")
+        (binary_dir / "gh").write_text(
+            "#!/bin/sh\n"
+            f"STATE=$(cat '{lifecycle}')\nLOG='{gh_log}'\n"
+            'case "$*" in\n'
+            '  *"api user"*) printf \'%s\' \'{"login":"alex"}\' ;;\n'
+            '  *"issue list"*"factory:review"*) '
+            f"if [ \"$STATE\" = review ]; then printf '%s' '{review_issue}'; "
+            "else printf '%s' '[]'; fi ;;\n"
+            "  *\"issue list\"*\"factory:closed\"*) printf '%s' '[]' ;;\n"
+            '  *"issue view"*) '
+            f"if [ \"$STATE\" = review ]; then printf '%s' '{review_view}'; "
+            f"else printf '%s' '{closed_view}'; fi ;;\n"
+            f"  *\"api graphql\"*) printf '%s' '{merged_pull_request}' ;;\n"
+            '  *"issue edit"*"factory:review"*"factory:closed"*) '
+            f"echo relabeled >> \"$LOG\"; echo closed > '{lifecycle}' ;;\n"
+            '  *"issue close"*"--reason completed"*) echo completed >> "$LOG" ;;\n'
+            "  *) printf '%s' '' ;;\n"
+            "esac\n"
+        )
+        pi = binary_dir / "pi"
+        pi.write_text(f"#!/bin/sh\necho launched >> '{pi_log}'\nexit 1\n")
+        pi.chmod(0o755)
+
+        quota_path = (
+            state_home
+            / "groundskeeper"
+            / "schedules"
+            / "terminal-e2e"
+            / "daily-quota.json"
+        )
+        quota_path.parent.mkdir(parents=True)
+        quota_path.write_text(
+            json.dumps({"date": date.today().isoformat(), "consumed": 1})
+        )
+        result = run_gk(
+            "automation",
+            "--config",
+            ".groundskeeper/config.yml",
+            "run-scheduled",
+            "daily",
+            "--schedule-id",
+            "terminal-e2e",
+            "--source-repository-path",
+            str(repo),
+            "--daily-attempt-limit",
+            "1",
+            "--rotation",
+            "fixed",
+            "--json",
+            cwd=repo,
+            env=env,
+        )
+
+        assert result.returncode == 0, result.stderr
+        payload = json.loads(result.stdout)
+        assert [run["status"] for run in payload["data"]["runs"]] == ["closed"]
+        assert payload["data"]["runs"][0]["consumed_attempt"] is False
+        assert (
+            payload["data"]["runs"][0]["pull_request_url"]
+            == "https://github.com/target/repo/pull/9"
+        )
+        assert payload["data"]["consumed_today"] == 1
+        assert gh_log.read_text().splitlines() == ["relabeled", "completed"]
+        assert not pi_log.exists()
+
     def test_list_show_and_validate_through_real_process(self, tmp_path: Path) -> None:
         repo, env = _factory_repo(tmp_path, "[]")
         listed = run_gk("automation", "list", "--json", cwd=repo, env=env)
@@ -1054,8 +1328,8 @@ class TestAutomationE2E:
             "running->deferred",
             "comment",
             "deferred->running",
-            "running->review",
             "comment",
+            "running->review",
         ]
         pi_calls = pi_log.read_text()
         assert pi_calls.count("--session-id ") == 3
@@ -1073,7 +1347,7 @@ class TestAutomationE2E:
         assert json.loads(second.stdout)["data"]["pull_request_url"].endswith("/pull/9")
 
         mutations = gh_log.read_text().splitlines()
-        assert mutations == ["ready->running", "running->review", "comment"]
+        assert mutations == ["ready->running", "comment", "running->review"]
         pi_log_text = pi_log.read_text()
         pi_calls = [
             line

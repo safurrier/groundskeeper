@@ -91,13 +91,16 @@ symlinks that resolve outside the snapshot are rejected.
 
 When no names are supplied, `run-scheduled` uses all automations in declaration
 order. `daily` rotation changes the first automation by local calendar day;
-`fixed` preserves declaration order. Groundskeeper reserves quota before every
-mutating tick and refunds only a proven `no-work` or `not-claimed` result, so a
-crash cannot fail open. The schedule ID owns a non-overlap lock and strict daily
-ledger under the Groundskeeper state root. Preflight validates the pinned
+`fixed` preserves declaration order. Groundskeeper first drains terminal review
+reconciliation without quota, even when the daily worker quota is exhausted.
+Each automation remains eligible to dispatch ready work in the same invocation
+after that cleanup. It then reserves quota before every worker-capable tick and
+refunds a proven `no-work`, `not-claimed`, or already-reconciled `closed` result,
+so a crash cannot fail open. The schedule ID owns a non-overlap lock and strict
+daily ledger under the Groundskeeper state root. Preflight validates the pinned
 config, skills, Pi, and target checkouts before opening that ledger. The JSON
 result includes the execution ref, pinned commit, managed workspace, quota
-state, and each tick result.
+state, and each reconciliation and tick result.
 
 The host adapter remains outside Groundskeeper: it chooses when to invoke the
 command and supplies secrets or a private Pi launcher. It should execute the
@@ -124,11 +127,12 @@ place complete definitions under `data.automations[]` and `data.automation`;
 returns `data.source`, `data.target`, its optional repository-qualified
 `data.task`, result detail, PR URL, and session handoff fields. Exit `0` means
 no work, review-ready work, deferred work, or a successful dry-run. In
-particular, `status: "deferred"` is a nonfatal scheduler result. Exit `2` is a
-configuration, command, tracker, or lock error; `4` is claim contention; and `5`
-is a blocked worker. Commands are noninteractive and ticks use a single-host
-advisory lock. Tick selection order is running, deferred, then ready; deferred
-work is claimed back to running before a recovery invocation.
+particular, `status: "deferred"` and terminal `status: "closed"` are nonfatal
+scheduler results; dry-run may report `would-close`. Exit `2` is a configuration,
+command, tracker, or lock error; `4` is claim contention; and `5` is a blocked
+worker. Commands are noninteractive and ticks use a single-host advisory lock.
+Tick selection order is terminal review reconciliation, running, deferred, then
+ready; deferred work is claimed back to running before a recovery invocation.
 
 ## `gk init`
 

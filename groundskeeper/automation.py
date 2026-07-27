@@ -9,6 +9,7 @@ from groundskeeper.domain.automation import (
     AdmittedTask,
     AutomationTask,
     FailureDisposition,
+    ReviewPullRequestState,
     SessionMetadata,
     TaskState,
     TickResult,
@@ -55,6 +56,11 @@ class AutomationService:
         self._runner = runner
 
     def tick(self, automation: Automation, dry_run: bool = False) -> TickResult:
+        terminal = ReviewReconciliationService(self._tracker).reconcile(
+            automation.name, dry_run
+        )
+        if terminal is not None:
+            return terminal
         running = self._tracker.list_running()
         if running:
             task = running[0]
@@ -310,3 +316,53 @@ class AutomationService:
             resume_command=result.resume_command if result else None,
             operator_detail=(result.error or None) if result else None,
         )
+
+
+class ReviewReconciliationService:
+    """Reconcile terminal review PRs without opening worker dispatch quota."""
+
+    def __init__(self, tracker: Tracker) -> None:
+        self._tracker = tracker
+
+    def reconcile(self, name: str, dry_run: bool = False) -> TickResult | None:
+        """Finish one review whose exact target PR reached a terminal state."""
+        tasks = self._tracker.list_review() + self._tracker.list_closed()
+        seen: set[tuple[str, int]] = set()
+        for task in tasks:
+            identity = (
+                task.source_issue.repository.casefold(),
+                task.source_issue.number,
+            )
+            if identity in seen:
+                continue
+            seen.add(identity)
+            pull_request = self._tracker.reconcile_review(task)
+            if (
+                pull_request is None
+                or pull_request.state is ReviewPullRequestState.OPEN
+            ):
+                continue
+            merged = pull_request.state is ReviewPullRequestState.MERGED
+            detail = (
+                f"Merged target pull request: {pull_request.url}"
+                if merged
+                else f"Target pull request closed without merge: {pull_request.url}"
+            )
+            closed_task = replace(task, state=TaskState.CLOSED)
+            if dry_run:
+                return TickResult(
+                    name,
+                    "would-close",
+                    closed_task,
+                    pull_request_url=pull_request.url,
+                    detail=detail,
+                )
+            self._tracker.close(task, merged=merged)
+            return TickResult(
+                name,
+                "closed",
+                closed_task,
+                pull_request_url=pull_request.url,
+                detail=detail,
+            )
+        return None

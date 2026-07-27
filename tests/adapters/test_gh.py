@@ -7,17 +7,25 @@ from groundskeeper.adapters.gh import (
     GH_BRANCH_PULL_REQUEST_LIMIT,
     GH_QUERY_TIMEOUT_SECONDS,
     GhClient,
+    GhComment,
     GhError,
 )
 from groundskeeper.adapters.process import CommandResult
-from groundskeeper.domain.automation import GitHubIssueIdentity
+from groundskeeper.domain.automation import (
+    GitHubIssueIdentity,
+    ReviewPullRequestState,
+)
 from groundskeeper.domain.task_contract import DependencyState, GitHubDependency
 
 
 class FakeProcess:
-    def __init__(self, stdout: str | list[str], success: bool = True) -> None:
+    def __init__(
+        self,
+        stdout: str | list[str],
+        success: bool | list[bool] = True,
+    ) -> None:
         self.stdout = [stdout] if isinstance(stdout, str) else stdout
-        self.success = success
+        self.success = [success] if isinstance(success, bool) else success
         self.argv: tuple[str, ...] = ()
         self.argv_history: list[tuple[str, ...]] = []
         self.timeout: int | None = None
@@ -28,8 +36,10 @@ class FakeProcess:
         self.argv = argv
         self.argv_history.append(argv)
         self.timeout = timeout
-        stdout = self.stdout[min(len(self.argv_history) - 1, len(self.stdout) - 1)]
-        return CommandResult(argv, cwd, 0 if self.success else 1, stdout, "")
+        call_index = len(self.argv_history) - 1
+        stdout = self.stdout[min(call_index, len(self.stdout) - 1)]
+        success = self.success[min(call_index, len(self.success) - 1)]
+        return CommandResult(argv, cwd, 0 if success else 1, stdout, "")
 
 
 def _graphql_page(
@@ -91,12 +101,127 @@ def test_invalid_json_is_actionable() -> None:
         GhClient(FakeProcess("not json"), Path(".")).list_issues("me/repo", ())
 
 
+def test_authenticated_login_is_typed_and_cached() -> None:
+    process = FakeProcess('{"login":"factory-bot"}')
+    client = GhClient(process, Path("."))
+
+    assert client.authenticated_login() == "factory-bot"
+    assert client.authenticated_login() == "factory-bot"
+    assert process.argv_history == [("gh", "api", "user")]
+
+
+def test_authenticated_login_command_failure_is_not_cached() -> None:
+    process = FakeProcess(
+        ["", '{"login":"factory-bot"}'],
+        success=[False, True],
+    )
+    client = GhClient(process, Path("."))
+
+    with pytest.raises(GhError, match="failed to resolve authenticated GitHub actor"):
+        client.authenticated_login()
+
+    assert client.authenticated_login() == "factory-bot"
+    assert process.argv_history == [
+        ("gh", "api", "user"),
+        ("gh", "api", "user"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        ("not json", "invalid JSON"),
+        ("[]", "unexpected JSON shape"),
+        ("null", "unexpected JSON shape"),
+        ("{}", "incomplete user data"),
+        ('{"login":""}', "incomplete user data"),
+        ('{"login":42}', "incomplete user data"),
+    ],
+)
+def test_authenticated_login_rejects_invalid_payload(
+    payload: str, message: str
+) -> None:
+    with pytest.raises(GhError, match=message):
+        GhClient(FakeProcess(payload), Path(".")).authenticated_login()
+
+
 def test_issue_discovery_is_server_filtered_and_bounded() -> None:
     process = FakeProcess("[]")
     GhClient(process, Path(".")).list_issues("me/repo", ("factory:ready",))
     assert process.argv[process.argv.index("--label") + 1] == "factory:ready"
     assert process.argv[process.argv.index("--limit") + 1] == "1000"
     assert process.timeout == GH_QUERY_TIMEOUT_SECONDS
+
+
+def test_issue_discovery_can_include_closed_review_issues() -> None:
+    process = FakeProcess("[]")
+
+    GhClient(process, Path(".")).list_issues(
+        "me/repo", ("factory:review",), state="all"
+    )
+
+    assert process.argv[process.argv.index("--state") + 1] == "all"
+
+
+def test_issue_discovery_parses_comment_author_and_body() -> None:
+    payload = json.dumps(
+        [
+            {
+                "number": 7,
+                "title": "Review",
+                "body": "",
+                "url": "https://github.com/source/queue/issues/7",
+                "author": {"login": "alex"},
+                "labels": [{"name": "factory:review"}],
+                "state": "OPEN",
+                "comments": [
+                    {
+                        "author": {"login": "alex"},
+                        "body": "AI-authored factory update: https://pr/9",
+                    }
+                ],
+            }
+        ]
+    )
+
+    issue = GhClient(FakeProcess(payload), Path(".")).list_issues(
+        "source/queue", ("factory:review",), state="all"
+    )[0]
+
+    assert issue.comments[0].author == "alex"
+    assert issue.comments[0].body.endswith("https://pr/9")
+
+
+def test_issue_discovery_skips_comments_from_deleted_accounts() -> None:
+    payload = json.dumps(
+        [
+            {
+                "number": 7,
+                "title": "Review",
+                "body": "",
+                "url": "https://github.com/source/queue/issues/7",
+                "author": {"login": "alex"},
+                "labels": [{"name": "factory:review"}],
+                "state": "OPEN",
+                "comments": [
+                    {"author": None, "body": "historical comment"},
+                    {"author": {"login": None}, "body": "deleted account"},
+                    {
+                        "author": {"login": "factory-bot"},
+                        "body": "AI-authored factory update: https://pr/9",
+                    },
+                ],
+            }
+        ]
+    )
+
+    issue = GhClient(FakeProcess(payload), Path(".")).list_issues(
+        "source/queue", ("factory:review",), state="all"
+    )[0]
+
+    assert issue.comments == (
+        GhComment("factory-bot", "AI-authored factory update: https://pr/9"),
+    )
 
 
 @pytest.mark.parametrize(
@@ -263,6 +388,52 @@ def test_reconciliation_reports_accepted_and_violating_coexistence() -> None:
     assert result.policy_violation is not None
 
 
+@pytest.mark.parametrize(
+    ("states", "expected_state", "expected_url"),
+    [
+        (["OPEN"], ReviewPullRequestState.OPEN, "https://pr/OPEN"),
+        (["CLOSED"], ReviewPullRequestState.CLOSED, "https://pr/CLOSED"),
+        (
+            ["CLOSED", "OPEN", "MERGED"],
+            ReviewPullRequestState.MERGED,
+            "https://pr/MERGED",
+        ),
+    ],
+)
+def test_review_pull_request_resolves_terminal_state_with_safe_precedence(
+    states: list[str],
+    expected_state: ReviewPullRequestState,
+    expected_url: str,
+) -> None:
+    process = FakeProcess(
+        _graphql_page(
+            [_pr(f"https://pr/{state}", "target/repo", state=state) for state in states]
+        )
+    )
+
+    result = GhClient(process, Path(".")).review_pull_request(
+        "target/repo",
+        GitHubIssueIdentity("source/queue", 12),
+        expected_url,
+    )
+
+    assert result is not None
+    assert result.state is expected_state
+    assert result.url == expected_url
+
+
+def test_review_pull_request_returns_none_without_exact_target() -> None:
+    process = FakeProcess(_graphql_page([_pr("https://pr/other", "other/repo")]))
+
+    result = GhClient(process, Path(".")).review_pull_request(
+        "target/repo",
+        GitHubIssueIdentity("source/queue", 12),
+        "https://pr/missing",
+    )
+
+    assert result is None
+
+
 def test_branch_reconciliation_filters_exact_target_and_head_branch() -> None:
     branch = "groundskeeper/task-abc123"
     process = FakeProcess(
@@ -285,6 +456,55 @@ def test_branch_reconciliation_filters_exact_target_and_head_branch() -> None:
     assert process.argv[process.argv.index("--repo") + 1] == "target/repo"
     assert process.argv[process.argv.index("--head") + 1] == branch
     assert process.argv[process.argv.index("--state") + 1] == "all"
+
+
+def test_review_branch_pull_request_resolves_merged_state() -> None:
+    branch = "groundskeeper/task-abc123"
+    process = FakeProcess(
+        json.dumps(
+            [_branch_pr("https://pr/exact", "target/repo", branch, state="MERGED")]
+        )
+    )
+
+    result = GhClient(process, Path(".")).review_branch_pull_request(
+        "target/repo", branch, "https://pr/exact"
+    )
+
+    assert result is not None
+    assert result.state is ReviewPullRequestState.MERGED
+
+
+def test_review_reconciliation_ignores_other_merged_pull_request() -> None:
+    process = FakeProcess(
+        _graphql_page(
+            [
+                _pr("https://pr/stale", "target/repo", state="MERGED"),
+                _pr("https://pr/accepted", "target/repo", state="OPEN"),
+            ]
+        )
+    )
+
+    result = GhClient(process, Path(".")).review_pull_request(
+        "target/repo",
+        GitHubIssueIdentity("source/queue", 12),
+        "https://pr/accepted",
+    )
+
+    assert result is not None
+    assert result.url == "https://pr/accepted"
+    assert result.state is ReviewPullRequestState.OPEN
+
+
+@pytest.mark.parametrize(
+    ("merged", "reason"), [(True, "completed"), (False, "not planned")]
+)
+def test_close_issue_preserves_terminal_disposition(merged: bool, reason: str) -> None:
+    process = FakeProcess("")
+
+    GhClient(process, Path(".")).close_issue("source/queue", 7, merged=merged)
+
+    assert process.argv[:3] == ("gh", "issue", "close")
+    assert process.argv[process.argv.index("--reason") + 1] == reason
 
 
 def test_branch_reconciliation_fails_closed_when_result_limit_is_reached() -> None:

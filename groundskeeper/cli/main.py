@@ -34,7 +34,7 @@ from groundskeeper.adapters.target_checkout import (
     validate_target_checkout,
 )
 from groundskeeper.adapters.tick_lock import TickLock
-from groundskeeper.automation import AutomationService
+from groundskeeper.automation import AutomationService, ReviewReconciliationService
 from groundskeeper.domain.automation import TickResult
 from groundskeeper.domain.config import (
     Automation,
@@ -179,6 +179,7 @@ def _automation_summary(
                 "deferred": item.source.deferred_label,
                 "review": item.source.review_label,
                 "blocked": item.source.blocked_label,
+                "closed": item.source.closed_label,
             },
         },
         "target": _automation_target_summary(item),
@@ -578,10 +579,12 @@ def _automation_tick_exit_code(status: str) -> int:
     return {
         "no-work": 0,
         "review": 0,
+        "closed": 0,
         "deferred": 0,
         "would-dispatch": 0,
         "would-resume": 0,
         "would-block": 0,
+        "would-close": 0,
         "would-wait": 0,
         "not-claimed": 4,
         "blocked": 5,
@@ -640,6 +643,25 @@ def _execute_automation_tick(
         )
         service = AutomationService(tracker, runner)
         return definition, service.tick(definition, dry_run=False)
+
+
+def _execute_automation_reconciliation(
+    config_path: Path,
+    name: str,
+) -> tuple[Automation, TickResult | None]:
+    """Reconcile terminal review state without preparing a worker workspace."""
+    definition = _load_automation(config_path, name)
+    process = ProcessClient()
+    with TickLock(_automation_lock_path(definition)):
+        tracker = GitHubIssuesTracker(
+            GhClient(process, definition.target.repository_path),
+            definition.source,
+            definition.target.repository,
+            definition.policy,
+            definition.target.checkout,
+        )
+        result = ReviewReconciliationService(tracker).reconcile(definition.name)
+    return definition, result
 
 
 def _preflight_scheduled_automations(
@@ -846,8 +868,27 @@ def automation_run_scheduled(
             operator_detail=result.operator_detail,
         )
 
+    def reconcile(config_path: Path, name: str) -> ScheduledTick | None:
+        try:
+            _definition, result = _execute_automation_reconciliation(config_path, name)
+        except (ConfigError, RuntimeError) as error:
+            return ScheduledTick(name, "error", 2, None, str(error))
+        if result is None:
+            return None
+        return ScheduledTick(
+            name,
+            result.status,
+            _automation_tick_exit_code(result.status),
+            _automation_task_data(result),
+            result.detail or None,
+            result.pull_request_url,
+            operator_detail=result.operator_detail,
+        )
+
     try:
-        scheduled = service.run(request, preflight=preflight, tick=tick)
+        scheduled = service.run(
+            request, preflight=preflight, tick=tick, reconcile=reconcile
+        )
     except (ConfigError, RuntimeError, ValueError) as error:
         _automation_error(str(error), json_output)
         return

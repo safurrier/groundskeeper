@@ -1,12 +1,15 @@
 from dataclasses import replace
+from typing import Literal
 
 import pytest
 
-from groundskeeper.adapters.gh import GhIssue
+from groundskeeper.adapters.gh import GhComment, GhIssue
 from groundskeeper.adapters.github_issues import GitHubIssuesTracker
 from groundskeeper.domain.automation import (
     AdmissionState,
     PullRequestReconciliation,
+    ReviewPullRequest,
+    ReviewPullRequestState,
     TaskState,
     automation_task_branch,
 )
@@ -47,13 +50,30 @@ class FakeGhClient:
         self.issue_repositories: list[str] = []
         self.pull_request_repositories: list[str] = []
         self.pull_request_branches: list[tuple[str, str]] = []
+        self.review_pull_request: ReviewPullRequest | None = None
+        self.review_pull_request_urls: list[str] = []
+        self.closed: list[tuple[int, bool]] = []
+        self.operations: list[str] = []
+        self.authenticated_user = "alex"
+        self.authenticated_login_calls = 0
 
-    def list_issues(self, repository: str, labels: tuple[str, ...]) -> list[GhIssue]:
+    def authenticated_login(self) -> str:
+        self.authenticated_login_calls += 1
+        return self.authenticated_user
+
+    def list_issues(
+        self,
+        repository: str,
+        labels: tuple[str, ...],
+        *,
+        state: Literal["open", "closed", "all"] = "open",
+    ) -> list[GhIssue]:
         self.issue_repositories.append(repository)
         return [
             item
             for item in self.issues
             if all(label in item.labels for label in labels)
+            and (state == "all" or item.state == state)
         ]
 
     def get_issue(self, repository: str, issue: int) -> GhIssue:
@@ -62,6 +82,7 @@ class FakeGhClient:
 
     def replace_label(self, repository: str, issue: int, old: str, new: str) -> None:
         self.issue_repositories.append(repository)
+        self.operations.append("label")
         self.labels.append((issue, old, new))
         self.issues = [
             replace(
@@ -75,6 +96,7 @@ class FakeGhClient:
 
     def comment(self, repository: str, issue: int, body: str) -> None:
         self.issue_repositories.append(repository)
+        self.operations.append("comment")
         self.comments.append((issue, body))
 
     def dependency_state(
@@ -94,10 +116,32 @@ class FakeGhClient:
         self.pull_request_branches.append((repository, branch))
         return PullRequestReconciliation()
 
+    def review_pull_request(
+        self, repository: str, source_issue: object, accepted_url: str
+    ) -> ReviewPullRequest | None:
+        self.pull_request_repositories.append(repository)
+        self.review_pull_request_urls.append(accepted_url)
+        return self.review_pull_request
+
+    def review_branch_pull_request(
+        self, repository: str, branch: str, accepted_url: str
+    ) -> ReviewPullRequest | None:
+        self.pull_request_branches.append((repository, branch))
+        self.review_pull_request_urls.append(accepted_url)
+        return self.review_pull_request
+
+    def close_issue(self, repository: str, issue: int, *, merged: bool) -> None:
+        self.issue_repositories.append(repository)
+        self.closed.append((issue, merged))
+        self.issues = [
+            replace(item, state="closed") if item.number == issue else item
+            for item in self.issues
+        ]
+
 
 def test_filters_untrusted_authors_and_claim_is_idempotent() -> None:
     client = FakeGhClient()
-    source = GitHubIssuesSource("source/queue", ("alex",))
+    source = GitHubIssuesSource("source/queue", ("alex",), ("alex",))
     tracker = GitHubIssuesTracker(
         client,
         source,
@@ -109,6 +153,7 @@ def test_filters_untrusted_authors_and_claim_is_idempotent() -> None:
     assert [task.source_issue.number for task in tasks] == [1]
     assert tasks[0].source_issue.repository == "source/queue"
     assert tasks[0].target_repository == "target/repo"
+    assert client.authenticated_login_calls == 0
     first = tracker.claim(tasks[0])
     second = tracker.claim(tasks[0])
     assert first.claimed and first.task.state == TaskState.RUNNING
@@ -124,7 +169,7 @@ def test_reconciliation_uses_task_branch_when_source_link_is_disabled() -> None:
     client = FakeGhClient()
     tracker = GitHubIssuesTracker(
         client,
-        GitHubIssuesSource("source/queue", ("alex",)),
+        GitHubIssuesSource("source/queue", ("alex",), ("alex",)),
         "target/repo",
         AutomationPolicy(link_source_issue=False),
         AutomationCheckout(
@@ -144,11 +189,308 @@ def test_reconciliation_uses_task_branch_when_source_link_is_disabled() -> None:
     ]
 
 
+def test_review_reconciliation_uses_task_branch_when_source_link_is_disabled() -> None:
+    client = FakeGhClient()
+    client.review_pull_request = ReviewPullRequest(
+        "https://github.com/target/repo/pull/9", ReviewPullRequestState.MERGED
+    )
+    tracker = GitHubIssuesTracker(
+        client,
+        GitHubIssuesSource("source/queue", ("alex",), ("alex",)),
+        "target/repo",
+        AutomationPolicy(link_source_issue=False),
+        AutomationCheckout(
+            "isolated-worktree",
+            "origin/main",
+            "none",
+            "changes/task",
+        ),
+    )
+    task = replace(
+        tracker.list_ready()[0],
+        review_pull_request_url="https://github.com/target/repo/pull/9",
+    )
+
+    assert tracker.reconcile_review(task) == client.review_pull_request
+    assert client.pull_request_branches == [
+        ("target/repo", automation_task_branch(task, "changes/task"))
+    ]
+    assert client.review_pull_request_urls == ["https://github.com/target/repo/pull/9"]
+
+
+@pytest.mark.parametrize("host", ["github.com", "redirect.github.com"])
+def test_review_listing_recovers_exact_pr_from_trusted_factory_comment(
+    host: str,
+) -> None:
+    client = FakeGhClient()
+    client.issues[0] = replace(
+        client.issues[0],
+        labels=("factory:review",),
+        comments=(
+            GhComment(
+                "alex",
+                f"AI-authored factory update: https://{host}/target/repo/pull/42",
+            ),
+        ),
+    )
+    tracker = GitHubIssuesTracker(
+        client,
+        GitHubIssuesSource("source/queue", ("alex",), ("alex",)),
+        "target/repo",
+        AutomationPolicy(),
+        AutomationCheckout(),
+    )
+
+    task = tracker.list_review()[0]
+
+    assert task.review_pull_request_url == "https://github.com/target/repo/pull/42"
+
+
+def test_review_listing_surfaces_unconfigured_marker_author() -> None:
+    client = FakeGhClient()
+    client.issues[0] = replace(
+        client.issues[0],
+        labels=("factory:review",),
+        comments=(
+            GhComment(
+                "mallory",
+                "AI-authored factory update: https://github.com/target/repo/pull/42",
+            ),
+        ),
+    )
+    tracker = GitHubIssuesTracker(
+        client,
+        GitHubIssuesSource("source/queue", ("alex",), ("alex",)),
+        "target/repo",
+        AutomationPolicy(),
+        AutomationCheckout(),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="unconfigured automation author: mallory",
+    ):
+        tracker.list_review()
+
+
+def test_review_listing_accepts_configured_bot_outside_task_authors() -> None:
+    client = FakeGhClient()
+    client.authenticated_user = "factory-bot"
+    client.issues[0] = replace(
+        client.issues[0],
+        labels=("factory:review",),
+        comments=(
+            GhComment(
+                "factory-bot",
+                "AI-authored factory update: https://github.com/target/repo/pull/42",
+            ),
+        ),
+    )
+    tracker = GitHubIssuesTracker(
+        client,
+        GitHubIssuesSource("source/queue", ("alex",), ("factory-bot",)),
+        "target/repo",
+        AutomationPolicy(),
+        AutomationCheckout(),
+    )
+
+    assert (
+        tracker.list_review()[0].review_pull_request_url
+        == "https://github.com/target/repo/pull/42"
+    )
+    assert client.authenticated_login_calls == 0
+
+
+def test_review_listing_accepts_prior_actor_after_credential_change() -> None:
+    client = FakeGhClient()
+    client.authenticated_user = "replacement-bot"
+    client.issues[0] = replace(
+        client.issues[0],
+        labels=("factory:review",),
+        comments=(
+            GhComment(
+                "prior-bot",
+                "AI-authored factory update: https://github.com/target/repo/pull/42",
+            ),
+        ),
+    )
+    tracker = GitHubIssuesTracker(
+        client,
+        GitHubIssuesSource(
+            "source/queue",
+            ("alex",),
+            ("prior-bot", "replacement-bot"),
+        ),
+        "target/repo",
+        AutomationPolicy(),
+        AutomationCheckout(),
+    )
+
+    assert (
+        tracker.list_review()[0].review_pull_request_url
+        == "https://github.com/target/repo/pull/42"
+    )
+    assert client.authenticated_login_calls == 0
+
+
+def test_terminal_reconciliation_survives_task_author_rotation() -> None:
+    client = FakeGhClient()
+    client.issues[0] = replace(
+        client.issues[0],
+        author="retired-author",
+        labels=("factory:review",),
+        comments=(
+            GhComment(
+                "factory-bot",
+                "AI-authored factory update: https://github.com/target/repo/pull/42",
+            ),
+        ),
+    )
+    tracker = GitHubIssuesTracker(
+        client,
+        GitHubIssuesSource("source/queue", ("replacement-author",), ("factory-bot",)),
+        "target/repo",
+        AutomationPolicy(),
+        AutomationCheckout(),
+    )
+
+    task = tracker.list_review()[0]
+    tracker.close(task, merged=True)
+
+    assert task.author == "retired-author"
+    assert task.review_pull_request_url == "https://github.com/target/repo/pull/42"
+    assert client.labels == [(1, "factory:review", "factory:closed")]
+    assert client.closed == [(1, True)]
+
+
+def test_unadmitted_terminal_issue_without_trusted_marker_is_ignored() -> None:
+    client = FakeGhClient()
+    client.issues[0] = replace(
+        client.issues[0],
+        author="mallory",
+        labels=("factory:review",),
+        comments=(),
+    )
+    tracker = GitHubIssuesTracker(
+        client,
+        GitHubIssuesSource("source/queue", ("alex",), ("factory-bot",)),
+        "target/repo",
+        AutomationPolicy(),
+        AutomationCheckout(),
+    )
+
+    assert tracker.list_review() == []
+
+
+@pytest.mark.parametrize(("state", "merged"), [("open", True), ("closed", False)])
+def test_close_retains_terminal_label_and_sets_issue_reason(
+    state: str, merged: bool
+) -> None:
+    client = FakeGhClient()
+    client.issues[0] = replace(
+        client.issues[0],
+        labels=("factory:review",),
+        state=state,
+        comments=(
+            GhComment(
+                "alex",
+                "AI-authored factory update: https://github.com/target/repo/pull/42",
+            ),
+        ),
+    )
+    tracker = GitHubIssuesTracker(
+        client,
+        GitHubIssuesSource("source/queue", ("alex",), ("alex",)),
+        "target/repo",
+        AutomationPolicy(),
+        AutomationCheckout(),
+    )
+    task = tracker.list_review()[0]
+
+    tracker.close(task, merged=merged)
+
+    assert client.labels == [(1, "factory:review", "factory:closed")]
+    assert client.closed == ([(1, merged)] if state == "open" else [])
+
+
+def test_close_recovers_open_issue_already_labeled_closed() -> None:
+    client = FakeGhClient()
+    client.issues[0] = replace(
+        client.issues[0],
+        labels=("factory:closed",),
+        state="open",
+        comments=(
+            GhComment(
+                "alex",
+                "AI-authored factory update: https://github.com/target/repo/pull/42",
+            ),
+        ),
+    )
+    tracker = GitHubIssuesTracker(
+        client,
+        GitHubIssuesSource("source/queue", ("alex",), ("alex",)),
+        "target/repo",
+        AutomationPolicy(),
+        AutomationCheckout(),
+    )
+    task = tracker.list_closed()[0]
+
+    tracker.close(task, merged=True)
+
+    assert client.labels == []
+    assert client.closed == [(1, True)]
+
+
+def test_close_rejects_removed_review_marker_after_listing() -> None:
+    client = FakeGhClient()
+    client.issues[0] = replace(
+        client.issues[0],
+        labels=("factory:review",),
+        comments=(
+            GhComment(
+                "alex",
+                "AI-authored factory update: https://github.com/target/repo/pull/42",
+            ),
+        ),
+    )
+    tracker = GitHubIssuesTracker(
+        client,
+        GitHubIssuesSource("source/queue", ("alex",), ("alex",)),
+        "target/repo",
+        AutomationPolicy(),
+        AutomationCheckout(),
+    )
+    task = tracker.list_review()[0]
+    client.issues[0] = replace(client.issues[0], comments=())
+
+    with pytest.raises(RuntimeError, match="exact authorized factory review marker"):
+        tracker.close(task, merged=True)
+
+    assert client.labels == []
+    assert client.closed == []
+
+
+def test_generic_transition_rejects_closed_lifecycle() -> None:
+    client = FakeGhClient()
+    tracker = GitHubIssuesTracker(
+        client,
+        GitHubIssuesSource("source/queue", ("alex",), ("alex",)),
+        "target/repo",
+        AutomationPolicy(),
+        AutomationCheckout(),
+    )
+
+    with pytest.raises(ValueError, match=r"require close\(\)"):
+        tracker.transition(tracker.list_ready()[0], TaskState.CLOSED)
+
+    assert client.labels == []
+
+
 def test_claim_returns_freshly_relisted_issue_body() -> None:
     client = FakeGhClient()
     tracker = GitHubIssuesTracker(
         client,
-        GitHubIssuesSource("source/queue", ("alex",)),
+        GitHubIssuesSource("source/queue", ("alex",), ("alex",)),
         "target/repo",
         AutomationPolicy(),
         AutomationCheckout(),
@@ -168,7 +510,7 @@ def test_claim_fails_if_post_mutation_snapshot_is_no_longer_running() -> None:
     client = FakeGhClient()
     tracker = GitHubIssuesTracker(
         client,
-        GitHubIssuesSource("source/queue", ("alex",)),
+        GitHubIssuesSource("source/queue", ("alex",), ("alex",)),
         "target/repo",
         AutomationPolicy(),
         AutomationCheckout(),
@@ -188,7 +530,7 @@ def test_refresh_rejects_closed_issue() -> None:
     client = FakeGhClient()
     tracker = GitHubIssuesTracker(
         client,
-        GitHubIssuesSource("source/queue", ("alex",)),
+        GitHubIssuesSource("source/queue", ("alex",), ("alex",)),
         "target/repo",
         AutomationPolicy(),
         AutomationCheckout(),
@@ -217,7 +559,7 @@ def test_lists_and_atomically_claims_deferred_work() -> None:
     ]
     tracker = GitHubIssuesTracker(
         client,
-        GitHubIssuesSource("source/queue", ("alex",)),
+        GitHubIssuesSource("source/queue", ("alex",), ("alex",)),
         "target/repo",
         AutomationPolicy(),
         AutomationCheckout(),
@@ -237,7 +579,7 @@ def test_admission_blocks_tracking_and_unresolved_dependencies() -> None:
     client = FakeGhClient()
     tracker = GitHubIssuesTracker(
         client,
-        GitHubIssuesSource("source/queue", ("alex",)),
+        GitHubIssuesSource("source/queue", ("alex",), ("alex",)),
         "target/repo",
         AutomationPolicy(),
         AutomationCheckout(),
@@ -280,6 +622,7 @@ def test_transition_to_deferred_uses_configured_label_and_ai_authored_comment() 
         GitHubIssuesSource(
             "source/queue",
             ("alex",),
+            ("alex",),
             deferred_label="queue:later",
         ),
         "target/repo",
@@ -298,7 +641,7 @@ def test_private_review_transition_uses_clickable_no_backlink_result_url() -> No
     client = FakeGhClient()
     tracker = GitHubIssuesTracker(
         client,
-        GitHubIssuesSource("source/queue", ("alex",)),
+        GitHubIssuesSource("source/queue", ("alex",), ("alex",)),
         "target/repo",
         AutomationPolicy(link_source_issue=False),
         AutomationCheckout("isolated-worktree", "origin/main"),
@@ -325,13 +668,77 @@ def test_private_review_transition_uses_clickable_no_backlink_result_url() -> No
             ),
         )
     ]
+    assert client.operations[-2:] == ["comment", "label"]
+
+
+def test_review_comment_survives_interrupted_label_transition() -> None:
+    client = FakeGhClient()
+    tracker = GitHubIssuesTracker(
+        client,
+        GitHubIssuesSource("source/queue", ("alex",), ("alex",)),
+        "target/repo",
+        AutomationPolicy(),
+        AutomationCheckout(),
+    )
+    running = tracker.claim(tracker.list_ready()[0]).task
+    original_replace = client.replace_label
+
+    def fail_review_label(repository: str, issue: int, old: str, new: str) -> None:
+        if new == "factory:review":
+            raise RuntimeError("interrupted label transition")
+        original_replace(repository, issue, old, new)
+
+    client.replace_label = fail_review_label  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="interrupted label transition"):
+        tracker.transition(
+            running,
+            TaskState.REVIEW,
+            "https://github.com/target/repo/pull/42",
+            pull_request_url="https://github.com/target/repo/pull/42",
+        )
+
+    assert client.comments == [
+        (
+            1,
+            ("AI-authored factory update: https://github.com/target/repo/pull/42"),
+        )
+    ]
+    assert client.issues[0].labels == ("factory:running",)
+
+
+def test_review_transition_rejects_unconfigured_authenticated_actor() -> None:
+    client = FakeGhClient()
+    client.authenticated_user = "replacement-bot"
+    tracker = GitHubIssuesTracker(
+        client,
+        GitHubIssuesSource("source/queue", ("alex",), ("prior-bot",)),
+        "target/repo",
+        AutomationPolicy(),
+        AutomationCheckout(),
+    )
+    running = tracker.claim(tracker.list_ready()[0]).task
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"replacement-bot.*source\.automation-authors",
+    ):
+        tracker.transition(
+            running,
+            TaskState.REVIEW,
+            "https://github.com/target/repo/pull/42",
+            pull_request_url="https://github.com/target/repo/pull/42",
+        )
+
+    assert client.comments == []
+    assert client.issues[0].labels == ("factory:running",)
 
 
 def test_private_policy_rewrites_target_pr_urls_in_blocked_comments() -> None:
     client = FakeGhClient()
     tracker = GitHubIssuesTracker(
         client,
-        GitHubIssuesSource("source/queue", ("alex",)),
+        GitHubIssuesSource("source/queue", ("alex",), ("alex",)),
         "target/repo",
         AutomationPolicy(link_source_issue=False),
         AutomationCheckout("isolated-worktree", "origin/main"),
@@ -359,7 +766,7 @@ def test_private_review_requires_typed_target_pr_before_mutation() -> None:
     client = FakeGhClient()
     tracker = GitHubIssuesTracker(
         client,
-        GitHubIssuesSource("source/queue", ("alex",)),
+        GitHubIssuesSource("source/queue", ("alex",), ("alex",)),
         "target/repo",
         AutomationPolicy(link_source_issue=False),
         AutomationCheckout("isolated-worktree", "origin/main"),
