@@ -7,6 +7,7 @@ from groundskeeper.adapters.gh import (
     GH_BRANCH_PULL_REQUEST_LIMIT,
     GH_QUERY_TIMEOUT_SECONDS,
     GhClient,
+    GhComment,
     GhError,
 )
 from groundskeeper.adapters.process import CommandResult
@@ -189,6 +190,38 @@ def test_issue_discovery_parses_comment_author_and_body() -> None:
 
     assert issue.comments[0].author == "alex"
     assert issue.comments[0].body.endswith("https://pr/9")
+
+
+def test_issue_discovery_skips_comments_from_deleted_accounts() -> None:
+    payload = json.dumps(
+        [
+            {
+                "number": 7,
+                "title": "Review",
+                "body": "",
+                "url": "https://github.com/source/queue/issues/7",
+                "author": {"login": "alex"},
+                "labels": [{"name": "factory:review"}],
+                "state": "OPEN",
+                "comments": [
+                    {"author": None, "body": "historical comment"},
+                    {"author": {"login": None}, "body": "deleted account"},
+                    {
+                        "author": {"login": "factory-bot"},
+                        "body": "AI-authored factory update: https://pr/9",
+                    },
+                ],
+            }
+        ]
+    )
+
+    issue = GhClient(FakeProcess(payload), Path(".")).list_issues(
+        "source/queue", ("factory:review",), state="all"
+    )[0]
+
+    assert issue.comments == (
+        GhComment("factory-bot", "AI-authored factory update: https://pr/9"),
+    )
 
 
 @pytest.mark.parametrize(

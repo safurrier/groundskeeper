@@ -74,11 +74,16 @@ class GitHubIssuesTracker:
         issues = self._client.list_issues(
             self._source.repository, (label,), state=issue_state
         )
-        return [
-            self._task_from_issue(issue, state)
-            for issue in issues
-            if issue.author in self._source.trusted_authors
-        ]
+        tasks: list[AutomationTask] = []
+        for issue in issues:
+            if issue.author in self._source.trusted_authors:
+                tasks.append(self._task_from_issue(issue, state))
+                continue
+            if state in {TaskState.REVIEW, TaskState.CLOSED}:
+                task = self._task_from_issue(issue, state)
+                if task.review_pull_request_url is not None:
+                    tasks.append(task)
+        return tasks
 
     def _task_from_issue(self, issue: GhIssue, state: TaskState) -> AutomationTask:
         return AutomationTask(
@@ -339,8 +344,14 @@ class GitHubIssuesTracker:
         issue = self._client.get_issue(
             self._source.repository, task.source_issue.number
         )
-        if issue.author not in self._source.trusted_authors:
-            raise RuntimeError("task author is no longer trusted")
+        current_pull_request_url = self._review_pull_request_url(issue)
+        if (
+            task.review_pull_request_url is None
+            or current_pull_request_url != task.review_pull_request_url
+        ):
+            raise RuntimeError(
+                "task no longer has the exact authorized factory review marker"
+            )
         if self._source.review_label in issue.labels:
             self._client.replace_label(
                 self._source.repository,

@@ -184,9 +184,11 @@ class GhClient:
                 body = comment.get("body")
                 comment_author = comment.get("author")
                 if not isinstance(comment_author, dict):
-                    raise TypeError
+                    continue
                 comment_login = cast(dict[str, object], comment_author).get("login")
-                if not isinstance(body, str) or not isinstance(comment_login, str):
+                if not isinstance(comment_login, str) or not comment_login:
+                    continue
+                if not isinstance(body, str):
                     raise TypeError
                 comments.append(GhComment(comment_login, body))
             author = item.get("author")

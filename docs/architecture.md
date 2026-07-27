@@ -140,9 +140,11 @@ review marker only from `automation-authors`. Groundskeeper also refuses to
 write a review marker unless the currently authenticated GitHub actor is in
 that list. Keep the prior and replacement accounts configured together during
 a credential migration so historical markers remain recognizable. A marker
-from any other actor is reported as an error rather than silently ignored. The
-review comment is written before the review label so an interrupted transition
-remains recoverable.
+from any other actor is reported as an error rather than silently ignored.
+Once an authorized marker admits a task to review, later changes to
+`trusted-authors` do not strand its terminal reconciliation. The review comment
+is written before the review label so an interrupted transition remains
+recoverable.
 Retry uses a new source issue because one source identity deterministically owns
 its branch, target pull request, and Pi session. Query errors fail without a
 lifecycle mutation.

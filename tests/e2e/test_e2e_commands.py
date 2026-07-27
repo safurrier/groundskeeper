@@ -331,20 +331,18 @@ class TestAutomationE2E:
         lifecycle.write_text("review")
         gh_log = tmp_path / "terminal-gh.log"
         pi_log = tmp_path / "terminal-pi.log"
-        review_issue = _issue_json(
-            "review",
-            comments=[
-                {
-                    "author": {"login": "alex"},
-                    "body": (
-                        "AI-authored factory update: "
-                        "https://github.com/target/repo/pull/9"
-                    ),
-                }
-            ],
-        )
-        review_view = _issue_object_json("review")
-        closed_view = _issue_object_json("closed")
+        marker_comments = [
+            {
+                "author": {"login": "alex"},
+                "body": (
+                    "AI-authored factory update: "
+                    "https://github.com/target/repo/pull/9"
+                ),
+            }
+        ]
+        review_issue = _issue_json("review", comments=marker_comments)
+        review_view = _issue_object_json("review", comments=marker_comments)
+        closed_view = _issue_object_json("closed", comments=marker_comments)
         merged_pull_request = _pull_request_graphql(state="MERGED")
         (binary_dir / "gh").write_text(
             "#!/bin/sh\n"
@@ -510,20 +508,18 @@ class TestAutomationE2E:
         lifecycle.write_text("review")
         gh_log = tmp_path / "scheduled-terminal-gh.log"
         pi_log = tmp_path / "scheduled-terminal-pi.log"
-        review_issue = _issue_json(
-            "review",
-            comments=[
-                {
-                    "author": {"login": "alex"},
-                    "body": (
-                        "AI-authored factory update: "
-                        "https://github.com/target/repo/pull/9"
-                    ),
-                }
-            ],
-        )
-        review_view = _issue_object_json("review")
-        closed_view = _issue_object_json("closed")
+        marker_comments = [
+            {
+                "author": {"login": "alex"},
+                "body": (
+                    "AI-authored factory update: "
+                    "https://github.com/target/repo/pull/9"
+                ),
+            }
+        ]
+        review_issue = _issue_json("review", comments=marker_comments)
+        review_view = _issue_object_json("review", comments=marker_comments)
+        closed_view = _issue_object_json("closed", comments=marker_comments)
         merged_pull_request = _pull_request_graphql(state="MERGED")
         (binary_dir / "gh").write_text(
             "#!/bin/sh\n"
