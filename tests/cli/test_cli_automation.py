@@ -83,6 +83,7 @@ def test_automation_list_json(tmp_path: Path) -> None:
                         "type": "github-issues",
                         "repository": "me/queue",
                         "trusted_authors": ["alex"],
+                        "automation_authors": ["alex"],
                         "labels": {
                             "ready": "factory:ready",
                             "running": "factory:running",
@@ -207,6 +208,7 @@ def test_automation_show_and_validate_use_versioned_envelopes(
                     "type": "github-issues",
                     "repository": "me/queue",
                     "trusted_authors": ["alex"],
+                    "automation_authors": ["alex"],
                     "labels": {
                         "ready": "factory:ready",
                         "running": "factory:running",
