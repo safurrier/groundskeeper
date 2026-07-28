@@ -173,6 +173,7 @@ def _automation_summary(
             "type": "github-issues",
             "repository": item.source.repository,
             "trusted_authors": list(item.source.trusted_authors),
+            "automation_authors": list(item.source.automation_authors),
             "labels": {
                 "ready": item.source.ready_label,
                 "running": item.source.running_label,
